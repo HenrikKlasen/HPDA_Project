@@ -6,6 +6,22 @@ use serde::{Deserialize, Serialize};
 use time::Time;
 use time::macros::time;
 
+// Helper Functions to generate random data.
+fn get_rand_category(rng: &mut ThreadRng) -> String {
+    let cat = vec!["Groceries", "Rent", "Fun", "Transportation"];
+    cat[rng.random_range(0..cat.len())].into()
+}
+
+fn get_rand_purpose(rng: &mut ThreadRng) -> String {
+    let purposes = vec!["Work", "College", "Leisure"];
+    purposes[rng.random_range(0..purposes.len())].into()
+}
+
+fn get_rand_financial_status(rng: &mut ThreadRng) -> String {
+    let purposes = vec!["Employed", "Studying", "Unemployed"];
+    purposes[rng.random_range(0..purposes.len())].into()
+}
+
 #[derive(Serialize, Deserialize)]
 struct ParticipantStatusLog {
     #[serde(rename = "participantId")]
@@ -17,6 +33,22 @@ struct ParticipantStatusLog {
     daily_food_budget: f32,
     #[serde(rename = "weeklyExtraBudget")]
     weekly_extra_budget: f32,
+}
+impl ParticipantStatusLog {
+    pub fn generate_random(nr_participants: i32, rng: &mut ThreadRng) -> Vec<ParticipantStatusLog> {
+        let mut ret = Vec::<ParticipantStatusLog>::new();
+        for i in 0..nr_participants {
+            let p = ParticipantStatusLog {
+                daily_food_budget: rng.random_range(10.0..50.0),
+                financial_status: get_rand_financial_status(rng),
+                participant_id: i,
+                timestamp: Utc::now(),
+                weekly_extra_budget: rng.random_range(0.0..500.0),
+            };
+            ret.push(p);
+        }
+        ret
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -79,7 +111,23 @@ struct FinancialJournal {
     category: String,
     amount: f64,
 }
-
+impl FinancialJournal {
+    pub fn generate_random(num_participants: i32, rng: &mut ThreadRng) -> Vec<FinancialJournal> {
+        let mut ret = Vec::<FinancialJournal>::new();
+        for i in 0..num_participants {
+            for _ in 0..50 {
+                let f = FinancialJournal {
+                    amount: rng.random_range(0.5..100.0),
+                    category: get_rand_category(rng),
+                    participant_id: i,
+                    timestamp: Utc::now(),
+                };
+                ret.push(f);
+            }
+        }
+        ret
+    }
+}
 #[derive(Serialize, Deserialize)]
 struct TravelJournal {
     #[serde(rename = "participantId")]
@@ -186,12 +234,6 @@ fn generate_jobs(n: i32, num_employers: i32, rng: &mut ThreadRng) -> Vec<Job> {
     ret
 }
 
-fn get_random_purpose(rng: &mut ThreadRng) -> String {
-    let purposes = vec!["Work", "College", "Leisure"];
-
-    purposes[rng.random_range(0..purposes.len())].into()
-}
-
 // Unsure if building or apartment for the travel_end_location.
 // Using building.
 fn generate_travel_journal(
@@ -206,7 +248,7 @@ fn generate_travel_journal(
             let time = Utc::now();
             let t = TravelJournal {
                 participant_id: p,
-                purpose: get_random_purpose(rng),
+                purpose: get_rand_purpose(rng),
                 starting_balance: 100.0,
                 ending_balance: rng.random_range(0.0..=100.0),
                 check_out_time: time,
@@ -228,4 +270,9 @@ fn main() {
 
     // Create less jobs than population so some people don't have jobs.
     let jobs = generate_jobs(90, employers.len() as i32, &mut rng);
+    let travel_journal =
+        generate_travel_journal(participants.len() as i32, buildings.len() as i32, &mut rng);
+    let financial_journal = FinancialJournal::generate_random(participants.len() as i32, &mut rng);
+    let participant_status =
+        ParticipantStatusLog::generate_random(participants.len() as i32, &mut rng);
 }
