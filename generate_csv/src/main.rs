@@ -1,8 +1,11 @@
+use std::fmt::Display;
+use std::str::FromStr;
+
 use chrono::{DateTime, Utc};
 use rand::prelude::*;
-use serde::{Deserialize, Serialize};
-use time::Time;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use time::macros::time;
+use time::{Time, format_description};
 
 // Helper Functions to generate random data.
 fn get_rand_category(rng: &mut ThreadRng) -> String {
@@ -18,6 +21,54 @@ fn get_rand_purpose(rng: &mut ThreadRng) -> String {
 fn get_rand_financial_status(rng: &mut ThreadRng) -> String {
     let purposes = vec!["Employed", "Studying", "Unemployed"];
     purposes[rng.random_range(0..purposes.len())].into()
+}
+
+fn serialize_time<S>(t: &Time, s: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    // This turns the struct into a simple String cell
+    s.serialize_str(&format!("{:02}:{:02}", t.hour(), t.minute()))
+}
+
+fn serialize_vec<S, T>(vec: &[T], serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+    T: Display,
+{
+    let s = vec
+        .iter()
+        .map(|v| v.to_string())
+        .collect::<Vec<String>>()
+        .join("|");
+    serializer.serialize_str(&s)
+}
+
+fn deserialize_vec<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: FromStr,
+    <T as FromStr>::Err: Display,
+{
+    let s = String::deserialize(deserializer)?;
+    if s.is_empty() {
+        return Ok(Vec::new());
+    }
+    s.split('|')
+        .map(|item| item.trim().parse::<T>().map_err(serde::de::Error::custom))
+        .collect()
+}
+
+fn deserialize_time<'de, D>(deserializer: D) -> Result<Time, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    let format =
+        format_description::parse("[hour]:[minute]:[second]").map_err(serde::de::Error::custom)?;
+
+    // 3. Parse back into a Time struct
+    Time::parse(&s, &format).map_err(serde::de::Error::custom)
 }
 
 #[derive(Serialize, Deserialize)]
@@ -65,6 +116,7 @@ struct Building {
     building_id: i32,
     #[serde(rename = "buildingType")]
     building_type: String,
+    #[serde(serialize_with = "serialize_vec", deserialize_with = "deserialize_vec")]
     units: Vec<i32>,
 }
 
@@ -84,11 +136,23 @@ struct Job {
     employer_id: i32,
     #[serde(rename = "hourlyRate")]
     hourly_rate: f32,
-    #[serde(rename = "startTime")]
+    #[serde(
+        serialize_with = "serialize_time",
+        deserialize_with = "deserialize_time",
+        rename = "startTime"
+    )]
     start_time: Time,
-    #[serde(rename = "endTime")]
+    #[serde(
+        serialize_with = "serialize_time",
+        deserialize_with = "deserialize_time",
+        rename = "endTime"
+    )]
     end_time: Time,
-    #[serde(rename = "daysToWork")]
+    #[serde(
+        rename = "daysToWork",
+        serialize_with = "serialize_vec",
+        deserialize_with = "deserialize_vec"
+    )]
     days_to_work: Vec<String>,
     #[serde(rename = "educationRequirement")]
     education_requirement: String,
@@ -259,16 +323,15 @@ fn generate_travel_journal(
 }
 
 fn save_csv<T>(filename: &str, data: &Vec<T>)
-where T: serde::Serialize {
-    let mut wtr = csv::Writer::from_path(filename)
-        .expect("Could not open file");
+where
+    T: serde::Serialize,
+{
+    let mut wtr = csv::Writer::from_path(filename).expect("Could not open file");
 
     for d in data {
-        wtr.serialize(d)
-            .expect("Could not serialize data");
+        wtr.serialize(d).expect("Could not serialize data");
     }
-    wtr.flush()
-        .expect("Could not write file in disk")
+    wtr.flush().expect("Could not write file in disk")
 }
 
 fn main() {
@@ -292,10 +355,10 @@ fn main() {
     let travel_journal =
         generate_travel_journal(participants.len() as i32, buildings.len() as i32, &mut rng);
     save_csv("traveljournal.csv", &travel_journal);
-    
+
     let financial_journal = FinancialJournal::generate_random(participants.len() as i32, &mut rng);
     save_csv("financialjournal.csv", &financial_journal);
-    
+
     for i in 0..10 {
         let participant_status =
             ParticipantStatusLog::generate_random(participants.len() as i32, &mut rng);
@@ -306,5 +369,4 @@ fn main() {
     // I Might have not undertstood the `N` in the ParticipantStatusLog<N>.
     // is the N for one participant? if so, I don't see the need to store it's id.
     // Is it for Weekly data? A bit confusing.
-
 }
