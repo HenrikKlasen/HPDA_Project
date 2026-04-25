@@ -10,6 +10,7 @@ fn polars_parquet_transform(file_path: PathBuf, new_path: PathBuf) {
     let lf = LazyCsvReader::new(PlRefPath::new(f1))
         .with_has_header(true)
         .with_infer_schema_length(Some(1000))
+        // A first try failed because a column had a `NA` do denote `no value`. this is not Nashville.
         .with_null_values(Some(NullValues::AllColumnsSingle(PlSmallStr::from_str("NA"))))
         .finish().unwrap()
         .with_new_streaming(true);
@@ -64,7 +65,6 @@ fn main() -> PolarsResult<()> {
 
     let path = Path::new(csv_folder);
     read_recurse(path);
-
 
     println!("Successfully converted 16GB CSV to compressed Parquet.");
     Ok(())
