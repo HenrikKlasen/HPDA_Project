@@ -4,6 +4,6 @@ import participantStatusReducer from './ParticipantStatusFileSlice'
 
 export default configureStore({
   reducer: {
-    participantStatusFiles: participantStatusReducer
+    files: participantStatusReducer
   }
 })

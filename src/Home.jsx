@@ -1,6 +1,8 @@
+import { ActivityLogComboBox } from './Components/ActivityLogComboBox'
+
 function Home() {
     return (<>
-        Home Called
+        <ActivityLogComboBox/>
     </>)
 }
 

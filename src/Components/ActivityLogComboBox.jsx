@@ -1,29 +1,39 @@
 import { useSelector, useDispatch } from 'react-redux';
-import { selectAllFiles, selectSingleFile } from '../redux/ParticipantStatusFileSlice';
+import { selectAllFiles, selectSingleFile, getSelectedFile } from '../redux/ParticipantStatusFileSlice';
 
-export function ActivityLogFiles() {
+import InputLabel from '@mui/material/InputLabel';
+import MenuItem from '@mui/material/MenuItem';
+import FormControl from '@mui/material/FormControl';
+import Select from '@mui/material/Select';
+
+export function ActivityLogComboBox() {
   const dispatch = useDispatch();
   const allFiles = useSelector(selectAllFiles);
-  const selectedId = useSelector((state) => state.files.selectedFileId);
+  const selectedFile = useSelector(getSelectedFile);
+
+  const file_items = allFiles.map((file) => (
+          <MenuItem value={file.name}>
+            {file.name}
+          </MenuItem>
+        ));
+
+  const handleChange = (event) => {
+    dispatch(selectSingleFile(event.target.value));
+  };
 
   return (
-    <div className="file-sidebar">
-      <h3>Available CSV Files</h3>
-      <ul>
-        {allFiles.map((file) => (
-          <li 
-            key={file.name}
-            style={{ 
-              fontWeight: file.name === selectedId ? 'bold' : 'normal',
-              cursor: 'pointer',
-              color: file.name === selectedId ? 'blue' : 'black'
-            }}
-            onClick={() => dispatch(selectSingleFile(file.name))}
-          >
-            {file.name}
-          </li>
-        ))}
-      </ul>
-    </div>
+    <FormControl sx={{ m: 1, minWidth: 320 }}>
+        <InputLabel id="selection-of-participant">Participant</InputLabel>
+        <Select
+            labelId="selection-of-participant-label"
+            id="selection-of-participant"
+            label="Participant Status Log"
+            onChange={handleChange}
+            value={selectedFile ? selectedFile.name : ""}
+            autoWidth
+        >
+            {file_items}
+        </Select>
+    </FormControl>
   );
 }
