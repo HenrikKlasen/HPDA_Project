@@ -1,17 +1,14 @@
-use std::{
-    env,
-    path::{Path, PathBuf},
-};
+use std::{collections::HashMap, env, path::PathBuf};
 
 use axum::{
-    Form, Json, Router,
+    Json, Router,
     extract::{Query, State},
     http::StatusCode,
-    routing::{get, post},
+    routing::get,
 };
+use polars::lazy::prelude::*;
 use polars::prelude::*;
 use serde::{Deserialize, Serialize};
-use tokio::fs::File;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct DataFile {
@@ -20,13 +17,10 @@ struct DataFile {
 }
 
 impl DataFile {
-    pub fn get_atribute_headers(&self)
-        -> Vec<String> {
+    pub fn get_atribute_headers(&self) -> Vec<String> {
         let mut lf =
-            LazyFrame::scan_parquet(
-                PlRefPath::new(&self.full_path),
-                ScanArgsParquet::default())
-            .unwrap();
+            LazyFrame::scan_parquet(PlRefPath::new(&self.full_path), ScanArgsParquet::default())
+                .unwrap();
 
         let schema = lf.collect_schema().unwrap();
 
@@ -123,6 +117,49 @@ fn print_all_datafiles(data_files: &Vec<DataFile>) {
     }
 }
 
+// Helper method to convert a DataFrame to json.
+fn df_to_json_string(df: &mut DataFrame) -> String {
+    let mut buffer = Vec::new();
+
+    // Create the writer and point it at our buffer
+    JsonWriter::new(&mut buffer)
+        .with_json_format(JsonFormat::Json)
+        .finish(df)
+        .unwrap();
+
+    // Convert bytes to String
+    let json_string = String::from_utf8(buffer).unwrap();
+
+    json_string
+}
+
+// Returns a jsonified string of {column: name, count: u32}
+async fn aggregate_fields_to_json(data_file: DataFile, column_id: String) -> String {
+    let mut df = tokio::task::spawn_blocking(move || {
+        let lf = LazyFrame::scan_parquet(
+            PlRefPath::new(&data_file.full_path),
+            ScanArgsParquet::default(),
+        )
+        .unwrap();
+
+        let res = lf
+            .group_by([col(&column_id)])
+            .agg([len().alias("count")])
+            .collect()
+            .unwrap();
+        res
+    })
+    .await
+    .unwrap();
+
+    let json = df_to_json_string(&mut df);
+    json
+}
+
+async fn not_implemented() -> StatusCode {
+    return StatusCode::BAD_REQUEST;
+}
+
 #[tokio::main]
 async fn main() {
     let data_assets = get_data_assets_folder();
@@ -132,6 +169,16 @@ async fn main() {
     read_recurse(&data_assets, &mut data_files);
 
     print_all_datafiles(&data_files);
+
+    let buildings_data_file = data_files
+        .iter()
+        .find(|d| d.display_name == "Buildings")
+        .unwrap();
+
+    let fields = aggregate_fields_to_json(buildings_data_file.clone(), "buildingType".into()).await;
+    println!("AAAAAA");
+
+    println!("fields {:?}", fields);
 
     let state = ServerState {
         data_assets: data_assets,
@@ -144,6 +191,9 @@ async fn main() {
             "/get_atribute_headers_by_filename",
             get(get_atribute_headers_by_filename),
         )
+        .route("/activity_logs", get(not_implemented))
+        .route("/attributes", get(not_implemented))
+        .route("/journals", get(not_implemented))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
