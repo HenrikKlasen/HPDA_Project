@@ -118,24 +118,11 @@ fn print_all_datafiles(data_files: &Vec<DataFile>) {
     }
 }
 
-// Helper method to convert a DataFrame to json.
-fn df_to_json_string(df: &mut DataFrame) -> String {
-    let mut buffer = Vec::new();
-
-    // Create the writer and point it at our buffer
-    JsonWriter::new(&mut buffer)
-        .with_json_format(JsonFormat::Json)
-        .finish(df)
-        .unwrap();
-
-    // Convert bytes to String
-    let json_string = String::from_utf8(buffer).unwrap();
-
-    json_string
-}
-
 // Returns a jsonified string of {column: name, count: u32}
-async fn aggregate_fields_to_json(data_file: DataFile, column_id: String) -> Json<Vec<serde_json::Value>> {
+async fn aggregate_fields_to_json(
+    data_file: DataFile,
+    column_id: String,
+) -> Json<Vec<serde_json::Value>> {
     let col_id = column_id.clone();
     let df = tokio::task::spawn_blocking(move || {
         let lf = LazyFrame::scan_parquet(
@@ -171,17 +158,26 @@ async fn aggregate_fields_to_json(data_file: DataFile, column_id: String) -> Jso
     Json(out)
 }
 
-
-async fn get_building_types(State(state): State<ServerState>) -> Json<Vec<serde_json::Value>> {
-    let buildings_data_file = state.data_files
+async fn aggregate_information(
+    state: ServerState,
+    file_name: &str,
+    column_id: &str,
+) -> Json<Vec<serde_json::Value>> {
+    let data_file = state
+        .data_files
         .iter()
-        .find(|d| d.display_name == "Buildings")
+        .find(|d| d.display_name == file_name)
         .unwrap();
 
-     aggregate_fields_to_json(
-        buildings_data_file.clone(),
-        "buildingType".into())
-        .await
+    aggregate_fields_to_json(data_file.clone(), column_id.into()).await
+}
+
+async fn get_building_types(State(state): State<ServerState>) -> Json<Vec<serde_json::Value>> {
+    aggregate_information(state, "Buildings", "buildingType").await
+}
+
+async fn get_check_in_types(State(state): State<ServerState>) -> Json<Vec<serde_json::Value>> {
+    aggregate_information(state, "CheckinJournal", "venueType").await
 }
 
 async fn not_implemented() -> StatusCode {
@@ -196,11 +192,12 @@ async fn main() {
     let mut data_files = Vec::<DataFile>::new();
     read_recurse(&data_assets, &mut data_files);
 
-    // print_all_datafiles(&data_files);
     let state = ServerState {
         data_assets: data_assets,
         data_files: data_files,
     };
+
+    print_all_datafiles(&state.data_files);
 
     let app = Router::new()
         .route("/get_data_files", get(get_data_files))
@@ -212,6 +209,7 @@ async fn main() {
         .route("/attributes", get(not_implemented))
         .route("/attributes/buildings/types", get(get_building_types))
         .route("/journals", get(not_implemented))
+        .route("/journals/check_in/types", get(get_check_in_types))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
