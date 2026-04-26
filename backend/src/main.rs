@@ -15,8 +15,27 @@ use tokio::fs::File;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct DataFile {
-    display_name: String,
-    full_path: String,
+    pub display_name: String,
+    pub full_path: String,
+}
+
+impl DataFile {
+    pub fn get_atribute_headers(&self)
+        -> Vec<String> {
+        let mut lf =
+            LazyFrame::scan_parquet(
+                PlRefPath::new(&self.full_path),
+                ScanArgsParquet::default())
+            .unwrap();
+
+        let schema = lf.collect_schema().unwrap();
+
+        let mut res = Vec::<String>::new();
+        for field in schema.iter_fields() {
+            res.push(field.name.to_string());
+        }
+        res
+    }
 }
 
 fn read_recurse(p: &std::path::Path, res: &mut Vec<DataFile>) {
@@ -70,6 +89,7 @@ async fn get_data_files(
 struct FilenameParam {
     filename: String,
 }
+
 async fn get_atribute_headers_by_filename(
     State(state): State<ServerState>,
     Query(filename): Query<FilenameParam>,
@@ -82,22 +102,25 @@ async fn get_atribute_headers_by_filename(
         return Err(StatusCode::BAD_REQUEST);
     };
 
-    println!("Trying to open file {}", &file.full_path);
-
-    let mut lf =
-        LazyFrame::scan_parquet(PlRefPath::new(&file.full_path), ScanArgsParquet::default())
-            .unwrap();
-
-    // Get the schema
-    let schema = lf.collect_schema().unwrap();
-
-    let mut res = Vec::<String>::new();
-
-    for field in schema.iter_fields() {
-        res.push(field.name.to_string());
-    }
-
+    let res = (*file).get_atribute_headers();
     return Ok(Json(res));
+}
+
+fn print_all_datafiles(data_files: &Vec<DataFile>) {
+    for file in data_files {
+        if file.display_name.starts_with("ParticipantStatusLog") {
+            // Too many logs, just show one.
+            if file.display_name == "ParticipantStatusLog1" {
+                println!("-=-=-=-=-=-=-=-=-=-=--=-=-");
+                println!("{:?}", file.display_name);
+                println!("{:?}", file.get_atribute_headers())
+            }
+        } else {
+            println!("-=-=-=-=-=-=-=-=-=-=--=-=-");
+            println!("{:?}", file.display_name);
+            println!("{:?}", file.get_atribute_headers());
+        }
+    }
 }
 
 #[tokio::main]
@@ -107,6 +130,8 @@ async fn main() {
 
     let mut data_files = Vec::<DataFile>::new();
     read_recurse(&data_assets, &mut data_files);
+
+    print_all_datafiles(&data_files);
 
     let state = ServerState {
         data_assets: data_assets,
