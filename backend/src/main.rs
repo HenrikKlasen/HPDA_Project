@@ -180,6 +180,10 @@ async fn get_check_in_types(State(state): State<ServerState>) -> Json<Vec<serde_
     aggregate_information(state, "CheckinJournal", "venueType").await
 }
 
+async fn get_interest_groups(State(state): State<ServerState>) -> Json<Vec<serde_json::Value>> {
+    aggregate_information(state, "Participants", "interestGroup").await
+}
+
 async fn not_implemented() -> StatusCode {
     return StatusCode::BAD_REQUEST;
 }
@@ -208,6 +212,7 @@ async fn main() {
         .route("/activity_logs", get(not_implemented))
         .route("/attributes", get(not_implemented))
         .route("/attributes/buildings/types", get(get_building_types))
+        .route("/attributes/participants/interest_groups", get(get_interest_groups))
         .route("/journals", get(not_implemented))
         .route("/journals/check_in/types", get(get_check_in_types))
         .with_state(state);
