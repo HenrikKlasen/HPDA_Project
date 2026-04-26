@@ -4,12 +4,14 @@ use std::{
 };
 
 use axum::{
-    Json, Router,
-    extract::State,
+    Form, Json, Router,
+    extract::{Query, State},
     http::StatusCode,
     routing::{get, post},
 };
+use polars::prelude::*;
 use serde::{Deserialize, Serialize};
+use tokio::fs::File;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct DataFile {
@@ -26,7 +28,10 @@ fn read_recurse(p: &std::path::Path, res: &mut Vec<DataFile>) {
         }
 
         let path = entry.path();
-        if path.extension() != Some("parquet".as_ref()) {}
+        if path.extension() != Some("parquet".as_ref()) {
+            continue;
+        }
+
         let stem = path.file_stem().unwrap();
 
         res.push(DataFile {
@@ -34,12 +39,6 @@ fn read_recurse(p: &std::path::Path, res: &mut Vec<DataFile>) {
             full_path: path.to_string_lossy().into_owned(),
         });
     }
-}
-
-async fn get_data_files(
-    State(state): State<ServerState>,
-) -> Result<Json<Vec<DataFile>>, StatusCode> {
-    return Ok(Json(state.data_files));
 }
 
 fn get_data_assets_folder() -> PathBuf {
@@ -60,6 +59,46 @@ struct ServerState {
     data_files: Vec<DataFile>,
 }
 
+// API CALLS
+async fn get_data_files(
+    State(state): State<ServerState>,
+) -> Result<Json<Vec<DataFile>>, StatusCode> {
+    return Ok(Json(state.data_files));
+}
+
+#[derive(Deserialize)]
+struct FilenameParam {
+    filename: String,
+}
+async fn get_atribute_headers_by_filename(
+    State(state): State<ServerState>,
+    Query(filename): Query<FilenameParam>,
+) -> Result<Json<Vec<String>>, StatusCode> {
+    let file = state
+        .data_files
+        .iter()
+        .find(|d| d.display_name == filename.filename);
+    let Some(file) = file else {
+        return Err(StatusCode::BAD_REQUEST);
+    };
+
+    println!("Trying to open file {}", &file.full_path);
+
+    let mut lf =
+        LazyFrame::scan_parquet(PlRefPath::new(&file.full_path), ScanArgsParquet::default())
+            .unwrap();
+
+    // Get the schema
+    let schema = lf.collect_schema().unwrap();
+    for field in schema.iter_fields() {
+        println!("{}: {:?}", field.name(), field.dtype());
+    }
+
+    println!("Schema: {:?}", schema);
+    let res = Vec::<String>::new();
+    return Ok(Json(res));
+}
+
 #[tokio::main]
 async fn main() {
     let data_assets = get_data_assets_folder();
@@ -75,6 +114,10 @@ async fn main() {
 
     let app = Router::new()
         .route("/get_data_files", get(get_data_files))
+        .route(
+            "/get_atribute_headers_by_filename",
+            get(get_atribute_headers_by_filename),
+        )
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
