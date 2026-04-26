@@ -9,6 +9,7 @@ use axum::{
 use polars::lazy::prelude::*;
 use polars::prelude::*;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct DataFile {
@@ -134,8 +135,9 @@ fn df_to_json_string(df: &mut DataFrame) -> String {
 }
 
 // Returns a jsonified string of {column: name, count: u32}
-async fn aggregate_fields_to_json(data_file: DataFile, column_id: String) -> String {
-    let mut df = tokio::task::spawn_blocking(move || {
+async fn aggregate_fields_to_json(data_file: DataFile, column_id: String) -> Json<Vec<serde_json::Value>> {
+    let col_id = column_id.clone();
+    let df = tokio::task::spawn_blocking(move || {
         let lf = LazyFrame::scan_parquet(
             PlRefPath::new(&data_file.full_path),
             ScanArgsParquet::default(),
@@ -152,8 +154,34 @@ async fn aggregate_fields_to_json(data_file: DataFile, column_id: String) -> Str
     .await
     .unwrap();
 
-    let json = df_to_json_string(&mut df);
-    json
+    let keys = df.column(&col_id).unwrap().str().unwrap();
+    let values = df.column("count").unwrap().u32().unwrap();
+
+    let mut out = Vec::new();
+
+    for (k, v) in keys.into_iter().zip(values.into_iter()) {
+        if let (Some(k), Some(v)) = (k, v) {
+            out.push(json!({
+                "category": k,
+                "count": v
+            }));
+        }
+    }
+
+    Json(out)
+}
+
+
+async fn get_building_types(State(state): State<ServerState>) -> Json<Vec<serde_json::Value>> {
+    let buildings_data_file = state.data_files
+        .iter()
+        .find(|d| d.display_name == "Buildings")
+        .unwrap();
+
+     aggregate_fields_to_json(
+        buildings_data_file.clone(),
+        "buildingType".into())
+        .await
 }
 
 async fn not_implemented() -> StatusCode {
@@ -168,18 +196,7 @@ async fn main() {
     let mut data_files = Vec::<DataFile>::new();
     read_recurse(&data_assets, &mut data_files);
 
-    print_all_datafiles(&data_files);
-
-    let buildings_data_file = data_files
-        .iter()
-        .find(|d| d.display_name == "Buildings")
-        .unwrap();
-
-    let fields = aggregate_fields_to_json(buildings_data_file.clone(), "buildingType".into()).await;
-    println!("AAAAAA");
-
-    println!("fields {:?}", fields);
-
+    // print_all_datafiles(&data_files);
     let state = ServerState {
         data_assets: data_assets,
         data_files: data_files,
@@ -193,6 +210,7 @@ async fn main() {
         )
         .route("/activity_logs", get(not_implemented))
         .route("/attributes", get(not_implemented))
+        .route("/attributes/buildings/types", get(get_building_types))
         .route("/journals", get(not_implemented))
         .with_state(state);
 
