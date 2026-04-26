@@ -13,7 +13,8 @@ def csv_to_json(csv_file, json_file):
             row.pop('location', None)  # Remove the original 'location' field
             row.pop("maxOccupancy", None)  # Remove the 'maxOccupancy' field
             row.pop("units", None)
-            row["id"] = row.pop("buildingID", None)  # Rename 'buildingID' to 'id'
+            row["id"] = row["buildingId"]  # Rename 'buildingID' to 'id'
+            row.pop("buildingId", None)  # Remove the original 'buildingID' field
             data.append(row)
 
     with open(json_file, 'w', encoding='utf-8') as jsonf:
