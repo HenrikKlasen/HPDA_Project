@@ -2,10 +2,10 @@ import * as d3 from 'd3';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 const CATEGORY_COLORS = {
-  Employer: '#2563eb',
-  Restaurant: '#ef4444',
-  Pub: '#f59e0b',
-  School: '#10b981',
+  Employer: '#0051ffff',
+  Restaurant: '#ff0000ff',
+  Pub: '#f50bcaff',
+  School: '#f59e0b',
 };
 
 function BuildingsMap() {
@@ -160,7 +160,7 @@ function BuildingsMap() {
   const buildingTypes = ['Commercial', 'Residental', 'School'];
   const typeColors = {
     Commercial: '#3b82f6',
-    Residental: '#10b981',
+    Residental: '#007850ff',
     School: '#f59e0b',
   };
 
