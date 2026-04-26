@@ -90,12 +90,13 @@ async fn get_atribute_headers_by_filename(
 
     // Get the schema
     let schema = lf.collect_schema().unwrap();
+
+    let mut res = Vec::<String>::new();
+
     for field in schema.iter_fields() {
-        println!("{}: {:?}", field.name(), field.dtype());
+        res.push(field.name.to_string());
     }
 
-    println!("Schema: {:?}", schema);
-    let res = Vec::<String>::new();
     return Ok(Json(res));
 }
 
