@@ -274,7 +274,7 @@ function resetZoom() {
       {error && <p>{error}</p>}
 
       {!loading && !error && (
-        <div className="chart-wrap" style={{ position: 'relative', marginBottom: '1rem', width: '100%', height: '600px', overflow: 'hidden' }}>
+        <div className="chart-wrap" style={{ position: 'relative', marginBottom: '1rem', width: '100%', height: '1000px', overflow: 'hidden' }}>
           <div style={{ marginBottom: '0.5rem', display: 'flex', gap: '0.5rem' }}>
             <button
               type="button"
