@@ -81,18 +81,18 @@ async fn get_data_files(
 }
 
 #[derive(Deserialize)]
-struct FilenameParam {
-    filename: String,
+struct StringParam {
+    val: String,
 }
 
 async fn get_atribute_headers_by_filename(
     State(state): State<ServerState>,
-    Query(filename): Query<FilenameParam>,
+    Query(filename): Query<StringParam>,
 ) -> Result<Json<Vec<String>>, StatusCode> {
     let file = state
         .data_files
         .iter()
-        .find(|d| d.display_name == filename.filename);
+        .find(|d| d.display_name == filename.val);
     let Some(file) = file else {
         return Err(StatusCode::BAD_REQUEST);
     };
@@ -118,7 +118,43 @@ fn print_all_datafiles(data_files: &Vec<DataFile>) {
     }
 }
 
-// Returns a jsonified string of {column: name, count: u32}
+// TODO: Make the select columns be variable.
+async fn select_columns_by_value(
+    data_file: DataFile,
+    select_column: String,
+    query_column: String,
+    query_value: String,
+) -> Json<Vec<i64>> {
+    let sel_id = select_column.clone();
+    let df = tokio::task::spawn_blocking(move || {
+        let lf = LazyFrame::scan_parquet(
+            PlRefPath::new(&data_file.full_path),
+            ScanArgsParquet::default(),
+        )
+        .unwrap();
+
+        let res = lf
+            .filter(col(&query_column).eq(lit(query_value)))
+            .select([col(select_column)])
+            .collect()
+            .unwrap();
+        res
+    })
+    .await
+    .unwrap();
+
+    let keys = df.column(&sel_id).unwrap().i64().unwrap();
+    let mut out = Vec::new();
+
+    for k in keys.into_iter() {
+        if let Some(k) = k {
+            out.push(k);
+        }
+    }
+
+    Json(out)
+}
+
 async fn aggregate_fields_to_json(
     data_file: DataFile,
     column_id: String,
@@ -184,6 +220,27 @@ async fn get_interest_groups(State(state): State<ServerState>) -> Json<Vec<serde
     aggregate_information(state, "Participants", "interestGroup").await
 }
 
+async fn participant_ids_by_interest_group(
+    State(state): State<ServerState>,
+    Query(interest_group): Query<StringParam>,
+) -> Json<Vec<i64>> {
+    let data_file = state
+        .data_files
+        .iter()
+        .find(|d| d.display_name == "Participants")
+        .unwrap();
+
+    let res = select_columns_by_value(
+        data_file.clone(),
+        "participantId".into(),
+        "interestGroup".into(),
+        interest_group.val,
+    )
+    .await;
+
+    res
+}
+
 async fn not_implemented() -> StatusCode {
     return StatusCode::BAD_REQUEST;
 }
@@ -212,7 +269,14 @@ async fn main() {
         .route("/activity_logs", get(not_implemented))
         .route("/attributes", get(not_implemented))
         .route("/attributes/buildings/types", get(get_building_types))
-        .route("/attributes/participants/interest_groups", get(get_interest_groups))
+        .route(
+            "/attributes/participants/interest_groups",
+            get(get_interest_groups),
+        )
+        .route(
+            "/attributes/participants/by/interest_groups",
+            get(participant_ids_by_interest_group),
+        )
         .route("/journals", get(not_implemented))
         .route("/journals/check_in/types", get(get_check_in_types))
         .with_state(state);
