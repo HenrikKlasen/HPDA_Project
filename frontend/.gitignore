@@ -1,7 +1,0 @@
-node_modules
-dist
-.env
-.env.*
-.vscode
-.DS_Store
-VAST-Challenge-2022
