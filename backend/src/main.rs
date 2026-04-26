@@ -220,6 +220,10 @@ async fn get_interest_groups(State(state): State<ServerState>) -> Json<Vec<serde
     aggregate_information(state, "Participants", "interestGroup").await
 }
 
+async fn get_travel_purposes(State(state): State<ServerState>) -> Json<Vec<serde_json::Value>> {
+    aggregate_information(state, "TravelJournal", "purpose").await
+}
+
 async fn participant_ids_by_interest_group(
     State(state): State<ServerState>,
     Query(interest_group): Query<StringParam>,
@@ -278,6 +282,7 @@ async fn main() {
             get(participant_ids_by_interest_group),
         )
         .route("/journals", get(not_implemented))
+        .route("/journals/travel/purposes", get(get_travel_purposes))
         .route("/journals/check_in/types", get(get_check_in_types))
         .with_state(state);
 
