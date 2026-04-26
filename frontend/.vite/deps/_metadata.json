@@ -1,54 +1,49 @@
 {
-  "hash": "45fbe2dc",
-  "configHash": "fce95e42",
+  "hash": "40814fab",
+  "configHash": "e81da1bf",
   "lockfileHash": "7b12a071",
-  "browserHash": "7f6ddc3b",
+  "browserHash": "32c5c8e0",
   "optimized": {
-    "axios": {
-      "src": "../../node_modules/axios/index.js",
-      "file": "axios.js",
-      "fileHash": "384f4fb0",
-      "needsInterop": false
-    },
-    "d3": {
-      "src": "../../node_modules/d3/src/index.js",
-      "file": "d3.js",
-      "fileHash": "be001845",
-      "needsInterop": false
+    "react": {
+      "src": "../../node_modules/react/index.js",
+      "file": "react.js",
+      "fileHash": "17a54056",
+      "needsInterop": true
     },
     "react-dom/client": {
       "src": "../../node_modules/react-dom/client.js",
       "file": "react-dom_client.js",
-      "fileHash": "fdb86869",
+      "fileHash": "fa9c7ac5",
       "needsInterop": true
     },
     "react-router-dom": {
       "src": "../../node_modules/react-router-dom/dist/index.mjs",
       "file": "react-router-dom.js",
-      "fileHash": "da7b9423",
+      "fileHash": "bb08b8b6",
       "needsInterop": false
     },
-    "react": {
-      "src": "../../node_modules/react/index.js",
-      "file": "react.js",
-      "fileHash": "31a23876",
-      "needsInterop": true
+    "axios": {
+      "src": "../../node_modules/axios/index.js",
+      "file": "axios.js",
+      "fileHash": "feb13c1c",
+      "needsInterop": false
     },
-    "react/jsx-dev-runtime": {
-      "src": "../../node_modules/react/jsx-dev-runtime.js",
-      "file": "react_jsx-dev-runtime.js",
-      "fileHash": "62bf6a75",
-      "needsInterop": true
+    "d3": {
+      "src": "../../node_modules/d3/src/index.js",
+      "file": "d3.js",
+      "fileHash": "33108dad",
+      "needsInterop": false
     }
   },
   "chunks": {
-    "chunk-CYJPkc-J": {
-      "file": "chunk-CYJPkc-J.js",
-      "isDynamicEntry": false
+    "chunk-LT5T7KFG": {
+      "file": "chunk-LT5T7KFG.js"
     },
-    "react-dom-DnQuiull": {
-      "file": "react-dom-DnQuiull.js",
-      "isDynamicEntry": false
+    "chunk-K3W77EYD": {
+      "file": "chunk-K3W77EYD.js"
+    },
+    "chunk-G3PMV62Z": {
+      "file": "chunk-G3PMV62Z.js"
     }
   }
 }

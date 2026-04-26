@@ -68,63 +68,50 @@ function BuildingsMap() {
     };
   }, []);
 
-  useEffect(() => {
-    console.log('🚀 Zoom effect setup started');
-    if (!svgRef.current || !groupRef.current) {
-      console.log('❌ Early return: missing refs');
-      return;
-    }
+useEffect(() => {
+  if (loading) return;
+  if (!svgRef.current || !groupRef.current) return;
 
-    const svgElement = svgRef.current;
-    const groupElement = groupRef.current;
-    
-    console.log('✅ SVG element found:', svgElement);
-    console.log('✅ Group element found:', groupElement);
-    console.log('✅ SVG dimensions:', { width: svgElement.clientWidth, height: svgElement.clientHeight });
+  const svg = d3.select(svgRef.current);
+  const group = d3.select(groupRef.current);
 
-    const svg = d3.select(svgElement);
-    const group = d3.select(groupElement);
-
-    // First, add native event listeners to verify events reach the SVG
-    svgElement.addEventListener('mousedown', (e) => {
-      console.log('🔴 NATIVE: Mouse down at', e.clientX, e.clientY);
+  const zoom = d3.zoom()
+    .scaleExtent([0.5, 8])
+    .on('zoom', (event) => {
+      group.attr('transform', event.transform);
+      setZoomLevel(event.transform.k);
     });
-    
-    svgElement.addEventListener('mousemove', (e) => {
-      console.log('🟢 NATIVE: Mouse move at', e.clientX, e.clientY);
-    });
-    
-    svgElement.addEventListener('mouseup', (e) => {
-      console.log('🟡 NATIVE: Mouse up at', e.clientX, e.clientY);
-    });
-    
-    svgElement.addEventListener('wheel', (e) => {
-      console.log('🟣 NATIVE: Wheel event deltaY:', e.deltaY);
-    }, { passive: false });
 
-    const zoom = d3.zoom()
-      .scaleExtent([0.5, 8])
-      .on('zoom', (event) => {
-        console.log('🎯 D3 ZOOM EVENT TRIGGERED');
-        console.log('  Transform:', event.transform);
-        console.log('  Scale (k):', event.transform.k);
-        console.log('  Translate (x, y):', event.transform.x, event.transform.y);
-        group.attr('transform', event.transform);
-        setZoomLevel(event.transform.k);
-      });
+  zoomBehaviorRef.current = zoom;
 
-    zoomBehaviorRef.current = zoom;
-    console.log('✅ D3 Zoom behavior created');
-    
-    // Attach zoom to SVG
-    svg.call(zoom);
-    console.log('✅ D3 Zoom behavior attached to SVG');
+  svg.call(zoom);
 
-    return () => {
-      console.log('🧹 Cleaning up zoom effect');
-      svg.on('.zoom', null);
-    };
-  }, []);
+  return () => {
+    svg.on('.zoom', null);
+  };
+}, [loading]);
+function handleZoom(direction) {
+  if (!svgRef.current || !zoomBehaviorRef.current) return;
+
+  const factor = direction === 'in' ? 1.5 : 1 / 1.5;
+  const newScale = Math.max(0.5, Math.min(8, zoomLevel * factor));
+
+  d3.select(svgRef.current)
+    .transition()
+    .duration(300)
+    .call(
+      zoomBehaviorRef.current.scaleTo,
+      newScale
+    );
+}
+function resetZoom() {
+  if (!svgRef.current || !zoomBehaviorRef.current) return;
+
+  d3.select(svgRef.current)
+    .transition()
+    .duration(300)
+    .call(zoomBehaviorRef.current.transform, d3.zoomIdentity);
+}
 
   const filteredBuildings = useMemo(
     () => buildings.filter((building) => enabledTypes[building.type]),
@@ -328,8 +315,8 @@ function BuildingsMap() {
             style={{ overflow: 'hidden', cursor: 'grab', border: '1px solid #e5e7eb', display: 'block', touchAction: 'none' }}
           >
             <g ref={groupRef}>
-              <rect width={displayWidth} height={displayHeight} fill="transparent" style={{ pointerEvents: 'none' }} />
-              <image href="/assets/basemap.png" x="0" y="0" width={displayWidth} height={displayHeight} style={{ pointerEvents: 'none' }} />
+              <rect width={displayWidth} height={displayHeight} fill="transparent" style={{ pointerEvents: 'all' }} />
+              <image href="/assets/basemap.png" x="0" y="0" width={displayWidth} height={displayHeight} style={{ pointerEvents: 'all' }} />
               
               {/* Interactive layer - buildings and points */}
               {filteredBuildings.map((building) => {
