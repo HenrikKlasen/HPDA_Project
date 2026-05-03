@@ -1,37 +1,37 @@
-import { useState } from 'react';
-import DateRangeFilter from '../features/filters/DateRangeFilter';
-import { useAnalyticsData } from '../hooks/useAnalyticsData';
+import HorizontalBarChart from '../components/charts/HorizontalBarChart';
+import MultiLineChart from '../components/charts/MultiLineChart';
+import WorkforceFlowChart from '../components/charts/WorkforceFlowChart';
+import KpiCard from '../components/kpi/KpiCard';
+import { mockEmployment, mockWorkforceTransitions } from '../data/mockEconomics';
 
 function ReportsPage() {
-  const [period, setPeriod] = useState('90d');
-  const { data, loading, error } = useAnalyticsData(period);
+  const { employerSize, turnoverRates, hiringTrend } = mockEmployment;
 
-  if (loading) return <p>Preparing reports...</p>;
-  if (error) return <p>{error}</p>;
-  if (!data) return <p>No report data available.</p>;
+  const totalEmployers = employerSize.length;
+  const totalEmployees = employerSize.reduce((sum, e) => sum + e.value, 0);
+  const overallTurnover = (turnoverRates.reduce((sum, e) => sum + e.value, 0) / turnoverRates.length).toFixed(1);
 
   return (
     <section>
-      <h2 className="section-title">Reports & Export</h2>
-      <p className="page-subtitle">Generate quick snapshots and export selected KPIs for offline analysis.</p>
-      <DateRangeFilter value={period} onChange={setPeriod} />
+      <h2 className="section-title">Job Market</h2>
+      <p className="page-subtitle">Employer size, turnover rates, and monthly hiring patterns across the city.</p>
 
-      <div className="card">
-        <h3 className="chart-title">Report preview</h3>
-        <ul className="simple-list">
-          <li>
-            <span>Total visits</span>
-            <strong>{data.summary.visits.toLocaleString()}</strong>
-          </li>
-          <li>
-            <span>Unique users</span>
-            <strong>{data.summary.uniqueUsers.toLocaleString()}</strong>
-          </li>
-          <li>
-            <span>Top source</span>
-            <strong>{data.sources[0]?.source ?? 'N/A'}</strong>
-          </li>
-        </ul>
+      <div className="grid kpis">
+        <KpiCard title="Total Employers" value={totalEmployers} />
+        <KpiCard title="Total Employees" value={totalEmployees} />
+        <KpiCard title="Avg Tenure" value="14.2 mo" />
+        <KpiCard title="Overall Turnover" value={`${overallTurnover}%`} />
+      </div>
+
+      <div className="grid charts">
+        <HorizontalBarChart data={employerSize} title="Employees per Employer" />
+        <HorizontalBarChart
+          data={turnoverRates}
+          title="Annual Turnover Rate by Employer"
+          valueFormat={(v) => `${v}%`}
+        />
+        <MultiLineChart data={hiringTrend} title="Monthly Hires vs Departures" />
+        <WorkforceFlowChart data={mockWorkforceTransitions} title="Sector-to-Sector Workforce Transitions" />
       </div>
     </section>
   );

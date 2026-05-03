@@ -1,10 +1,11 @@
 import { NavLink } from 'react-router-dom';
 
 const tabs = [
-  { to: '/overview', label: 'Overview' },
-  { to: '/audience', label: 'Audience Insights' },
-  { to: '/performance', label: 'Event Performance' },
-  { to: '/reports', label: 'Reports & Export' },
+  { to: '/about', label: 'About' },
+  { to: '/overview', label: 'Overall Finance' },
+  { to: '/performance', label: 'Business Health' },
+  { to: '/audience', label: 'Cost of Living' },
+  { to: '/reports', label: 'Job Market' },
 ];
 
 function AppShell({ children }) {
