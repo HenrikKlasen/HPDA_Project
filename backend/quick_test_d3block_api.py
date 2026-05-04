@@ -39,7 +39,7 @@ def main() -> int:
         default=["participantId", "age"],
         help="Columns for analysis",
     )
-    parser.add_argument("--chart", default="scatter", choices=["scatter", "heatmap", "sankey", "pair"])
+    parser.add_argument("--chart", default="scatter", choices=["scatter", "heatmap", "sankey", "pair", "join", "join-chart", "join-sync"])
     parser.add_argument("--x", help="X column for pair/scatter")
     parser.add_argument("--y", help="Y column for pair/scatter")
     parser.add_argument("--bins", type=int, default=20, help="Bins per axis for heatmap in pair view")
@@ -57,6 +57,8 @@ def main() -> int:
     datasets_url = f"{args.base_url}/api/datasets"
     d3block_url = f"{args.base_url}/api/d3block"
     sankey_url = f"{args.base_url}/api/d3block-sankey"
+    join_url = f"{args.base_url}/api/join"
+    join_sync_url = f"{args.base_url}/api/join-sync"
 
     print(f"Checking datasets endpoint: {datasets_url}")
     try:
@@ -116,6 +118,167 @@ def main() -> int:
             "limit": args.limit,
         }
         url = f"{args.base_url}/api/d3block-pair"
+    elif args.chart == "join":
+        payload = {
+            "tables": [
+                {
+                    "name": "participantstatuslogs1",
+                    "alias": "log",
+                    "columns": ["participantId", "jobId", "availableBalance", "currentMode"],
+                },
+                {
+                    "name": "participants",
+                    "alias": "p",
+                    "columns": ["participantId", "age", "joviality", "householdSize"],
+                },
+                {
+                    "name": "jobs",
+                    "alias": "j",
+                    "columns": ["jobId", "employerId", "hourlyRate"],
+                },
+                {
+                    "name": "employers",
+                    "alias": "e",
+                    "columns": ["employerId", "buildingId", "location"],
+                },
+                {
+                    "name": "buildings",
+                    "alias": "b",
+                    "columns": ["buildingId", "buildingType", "location"],
+                },
+            ],
+            "joins": [
+                {"left": "log.participantId", "right": "p.participantId", "how": "inner"},
+                {"left": "log.jobId", "right": "j.jobId", "how": "left"},
+                {"left": "j.employerId", "right": "e.employerId", "how": "left"},
+                {"left": "e.buildingId", "right": "b.buildingId", "how": "left"},
+            ],
+            "select": [
+                "p.age",
+                "p.joviality",
+                "p.householdSize",
+                "log.availableBalance",
+                "log.currentMode",
+                "j.hourlyRate",
+                "e.location",
+                "b.buildingType",
+            ],
+            "limit": args.limit,
+            "format": "html",
+        }
+        url = join_url
+    elif args.chart == "join-chart":
+        payload = {
+            "tables": [
+                {
+                    "name": "participantstatuslogs1",
+                    "alias": "log",
+                    "columns": ["participantId", "jobId", "availableBalance", "currentMode"],
+                },
+                {
+                    "name": "participants",
+                    "alias": "p",
+                    "columns": ["participantId", "age", "joviality", "householdSize"],
+                },
+                {
+                    "name": "jobs",
+                    "alias": "j",
+                    "columns": ["jobId", "employerId", "hourlyRate"],
+                },
+                {
+                    "name": "employers",
+                    "alias": "e",
+                    "columns": ["employerId", "buildingId", "location"],
+                },
+                {
+                    "name": "buildings",
+                    "alias": "b",
+                    "columns": ["buildingId", "buildingType", "location"],
+                },
+            ],
+            "joins": [
+                {"left": "log.participantId", "right": "p.participantId", "how": "inner"},
+                {"left": "log.jobId", "right": "j.jobId", "how": "left"},
+                {"left": "j.employerId", "right": "e.employerId", "how": "left"},
+                {"left": "e.buildingId", "right": "b.buildingId", "how": "left"},
+            ],
+            "select": [
+                "p.age",
+                "p.joviality",
+                "p.householdSize",
+                "log.availableBalance",
+                "log.currentMode",
+                "j.hourlyRate",
+                "e.location",
+                "b.buildingType",
+            ],
+            "chart": "scatter",
+            "chart_columns": ["p.age", "p.joviality"],
+            "limit": args.limit,
+        }
+        url = f"{args.base_url}/api/join-chart"
+    elif args.chart == "join-sync":
+        payload = {
+            "tables": [
+                {
+                    "name": "participantstatuslogs1",
+                    "alias": "log",
+                    "columns": ["participantId", "jobId", "availableBalance", "currentMode"],
+                },
+                {
+                    "name": "participants",
+                    "alias": "p",
+                    "columns": ["participantId", "age", "joviality", "householdSize"],
+                },
+                {
+                    "name": "jobs",
+                    "alias": "j",
+                    "columns": ["jobId", "employerId", "hourlyRate"],
+                },
+                {
+                    "name": "employers",
+                    "alias": "e",
+                    "columns": ["employerId", "buildingId", "location"],
+                },
+                {
+                    "name": "buildings",
+                    "alias": "b",
+                    "columns": ["buildingId", "buildingType", "location"],
+                },
+            ],
+            "joins": [
+                {"left": "log.participantId", "right": "p.participantId", "how": "inner"},
+                {"left": "log.jobId", "right": "j.jobId", "how": "left"},
+                {"left": "j.employerId", "right": "e.employerId", "how": "left"},
+                {"left": "e.buildingId", "right": "b.buildingId", "how": "left"},
+            ],
+            "select": [
+                "p.age",
+                "p.joviality",
+                "p.householdSize",
+                "log.availableBalance",
+                "log.currentMode",
+                "j.hourlyRate",
+                "e.location",
+                "b.buildingType",
+            ],
+            "views": [
+                {"type": "scatter", "x": "p.age", "y": "p.joviality", "title": "Age vs Joviality"},
+                {"type": "area", "x": "p.age", "y": "p.joviality", "title": "Age vs Joviality (Area)"},
+                {"type": "step", "x": "p.age", "y": "log.availableBalance", "title": "Age vs Available Balance (Step)"},
+                {"type": "line", "x": "p.age", "y": "log.availableBalance", "title": "Age vs Available Balance (Line)"},
+                {"type": "heatmap", "x": "p.age", "y": "log.availableBalance", "bins": 8, "title": "Age vs Available Balance (Heatmap)"},
+                {"type": "histogram", "x": "p.age", "bins": 10, "title": "Age Distribution"},
+                {"type": "bar", "x": "log.currentMode", "title": "Current Mode Counts"},
+                {"type": "boxplot", "x": "log.currentMode", "y": "log.availableBalance", "title": "Available Balance by Mode"},
+                {"type": "circlepack", "x": "log.currentMode", "title": "Current Mode Circle Pack"},
+                {"type": "chord", "x": "log.currentMode", "y": "e.location", "title": "Mode to Location Chord"},
+                {"type": "violin", "x": "log.currentMode", "y": "log.availableBalance", "title": "Available Balance Violin"},
+                {"type": "scatter", "x": "p.joviality", "y": "log.availableBalance", "title": "Joviality vs Available Balance"},
+            ],
+            "limit": args.limit,
+        }
+        url = join_sync_url
     else:
         print(f"Unknown chart type: {args.chart}")
         return 1
@@ -131,7 +294,7 @@ def main() -> int:
         print(f"Saved response to: {output_path}")
 
         # Very lightweight sanity check
-        if "<html" in html_or_error.lower() or "<!doctype html" in html_or_error.lower():
+        if "<html" in html_or_error.lower() or "<!doctype html" in html_or_error.lower() or "<table" in html_or_error.lower() or html_or_error.lstrip().startswith("{"):
             print("Looks like valid HTML output.")
             return 0
 
