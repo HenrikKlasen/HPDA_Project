@@ -5,8 +5,10 @@ from pathlib import Path
 import pandas as pd
 from d3blocks import D3Blocks
 from flask import Flask, jsonify, request
+from flask_cors import CORS
 
 app = Flask(__name__)
+CORS(app)
 
 
 def _resolve_db_path() -> Path:
@@ -1689,209 +1691,1902 @@ def generate_sankey_html():
 		return jsonify({"error": f"Failed to build Sankey: {exc}"}), 500
 
 
-@app.route("/api/d3block-pair", methods=["POST"])
-def generate_pair_html():
-	"""
-	Generate a single HTML page with a scatter + heatmap that are data-driven
-	and synchronized. Server-side binning is used for the heatmap; the raw
-	points are embedded as JSON so client-side D3 can link elements reliably.
+def _parse_wkt_point(wkt: str) -> tuple[float, float] | tuple[None, None]:
+	m = re.search(r"POINT\s*\(\s*([\d.eE+\-]+)\s+([\d.eE+\-]+)\s*\)", str(wkt), re.IGNORECASE)
+	return (float(m.group(1)), float(m.group(2))) if m else (None, None)
 
-	Request JSON:
-	{
-		"dataset": "participants",
-		"x": "longitude",
-		"y": "latitude",
-		"bins": 20,        # optional, bins per axis for heatmap
-		"limit": 5000
-	}
-	"""
-	payload = request.get_json(silent=True) or {}
-	dataset = payload.get("dataset")
-	x_col = payload.get("x")
-	y_col = payload.get("y")
-	bins = int(payload.get("bins", 20))
-	limit = int(payload.get("limit", 5000))
 
-	if not dataset or not _is_valid_identifier(dataset):
-			return jsonify({"error": "Invalid dataset"}), 400
-	if not x_col or not _is_valid_identifier(x_col):
-			return jsonify({"error": "Invalid x column"}), 400
-	if not y_col or not _is_valid_identifier(y_col):
-			return jsonify({"error": "Invalid y column"}), 400
+def _get_job_transitions(conn: sqlite3.Connection) -> tuple[pd.DataFrame, pd.DataFrame]:
+	"""Return (start_employers, end_employers) DataFrames with participantId → employerId.
+
+	Uses the numerically-first and numerically-last participantstatuslogs table
+	as proxies for the start and end of the study period.
+	"""
+	rows = conn.execute(
+		"SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'participantstatuslogs%'"
+	).fetchall()
+	tables = sorted([r[0] for r in rows], key=lambda x: int(re.search(r"(\d+)$", x).group(1)))
+	if len(tables) < 2:
+		return pd.DataFrame(), pd.DataFrame()
+
+	jobs_df = pd.read_sql_query("SELECT jobId, employerId FROM jobs", conn)
+
+	def dominant_employer(table: str) -> pd.DataFrame:
+		df = pd.read_sql_query(
+			f"""
+			SELECT participantId, jobId, COUNT(*) AS cnt
+			FROM {_quote_identifier(table)}
+			WHERE jobId IS NOT NULL
+			  AND TRIM(CAST(jobId AS TEXT)) NOT IN ('', 'N/A', 'nan')
+			GROUP BY participantId, jobId
+			""",
+			conn,
+		)
+		if df.empty:
+			return pd.DataFrame(columns=["participantId", "employerId"])
+		top = (
+			df.sort_values("cnt", ascending=False)
+			.groupby("participantId")
+			.first()
+			.reset_index()[["participantId", "jobId"]]
+		)
+		top["jobId"] = pd.to_numeric(top["jobId"], errors="coerce")
+		return top.merge(jobs_df, on="jobId", how="left")[["participantId", "employerId"]].dropna()
+
+	return dominant_employer(tables[0]), dominant_employer(tables[-1])
+
+
+def _compute_employer_health_scores(conn: sqlite3.Connection) -> pd.DataFrame:
+	"""Estimated health score per employer (derived — not an official measure).
+
+	Score = normalized(job_count)*0.25 + normalized(avg_rate)*0.25
+	      + normalized(stable)*0.25 - normalized(turnover_rate)*0.25
+	All components normalised 0–1 within the current dataset.
+	"""
+	job_df = pd.read_sql_query(
+		"SELECT employerId, COUNT(*) AS job_count, AVG(hourlyRate) AS avg_rate FROM jobs GROUP BY employerId",
+		conn,
+	)
+	start_df, end_df = _get_job_transitions(conn)
+	if start_df.empty or end_df.empty:
+		return pd.DataFrame()
+
+	all_employers = set(start_df["employerId"].dropna().astype(int)) | set(end_df["employerId"].dropna().astype(int))
+	rows = []
+	for emp in all_employers:
+		sp = set(start_df[start_df["employerId"] == emp]["participantId"])
+		ep = set(end_df[end_df["employerId"] == emp]["participantId"])
+		stable = len(sp & ep)
+		departed = len(sp - ep)
+		arrived  = len(ep - sp)
+		total_start = max(len(sp), 1)
+		rows.append({
+			"employerId":    emp,
+			"stable":        stable,
+			"departed":      departed,
+			"arrived":       arrived,
+			"total_start":   total_start,
+			"turnover_rate": round((departed + arrived) / total_start, 3),
+		})
+	trans_df = pd.DataFrame(rows)
+
+	job_df["employerId"]   = pd.to_numeric(job_df["employerId"],   errors="coerce")
+	trans_df["employerId"] = pd.to_numeric(trans_df["employerId"], errors="coerce")
+	df = job_df.merge(trans_df, on="employerId", how="inner")
+	if df.empty:
+		return df
+
+	def _norm(col: str) -> pd.Series:
+		mn, mx = df[col].min(), df[col].max()
+		if mx == mn:
+			return pd.Series([0.5] * len(df), index=df.index)
+		return (df[col] - mn) / (mx - mn)
+
+	df["health_score"] = (
+		_norm("job_count")    * 0.25
+		+ _norm("avg_rate")   * 0.25
+		+ _norm("stable")     * 0.25
+		- _norm("turnover_rate") * 0.25
+	).round(3)
+	return df
+
+@app.route("/api/business-health-page", methods=["GET"])
+def business_health_page():
+	"""Combined Business Health dashboard: 4 linked charts in one page."""
+	if not DB_PATH.exists():
+		return jsonify({"error": f"Database not found: {DB_PATH}"}), 404
 
 	conn = _get_db_connection()
 	try:
-			if not _table_exists(conn, dataset):
-					return jsonify({"error": f"Dataset '{dataset}' not found"}), 404
-
-			available_columns = _get_table_columns(conn, dataset)
-			if x_col not in available_columns or y_col not in available_columns:
-					return jsonify({"error": f"Columns not found in '{dataset}'"}), 400
-
-			query = f"SELECT {x_col}, {y_col} FROM {dataset} LIMIT ?"
-			df = pd.read_sql_query(query, conn, params=(limit,))
+		health_df = _compute_employer_health_scores(conn)
+		activity_df = pd.read_sql_query(
+			"""
+			SELECT CAST(venueId AS INTEGER) AS employerId,
+			       strftime('%Y-%m', timestamp) AS month,
+			       COUNT(*) AS checkins
+			FROM checkinjournal
+			WHERE venueType = 'Workplace'
+			GROUP BY employerId, month
+			ORDER BY month
+			""",
+			conn,
+		)
 	finally:
-			conn.close()
+		conn.close()
 
-	if df.empty:
-			return jsonify({"error": "No data returned"}), 404
+	if health_df.empty:
+		return jsonify({"error": "Not enough data to build business health page"}), 404
 
-	# Coerce numeric and drop NaNs
-	df[x_col] = pd.to_numeric(df[x_col], errors="coerce")
-	df[y_col] = pd.to_numeric(df[y_col], errors="coerce")
-	df = df.dropna(subset=[x_col, y_col])
+	months_list = sorted(activity_df["month"].unique().tolist()) if not activity_df.empty else []
 
-	if df.empty:
-			return jsonify({"error": "No valid numeric rows in the chosen columns"}), 400
+	act_map: dict = {}
+	for _, row in activity_df.iterrows():
+		eid = int(row["employerId"])
+		act_map.setdefault(eid, {})[row["month"]] = int(row["checkins"])
 
-	# Compute bins for heatmap
-	df["_xb"] = pd.cut(df[x_col], bins=bins, labels=False)
-	df["_yb"] = pd.cut(df[y_col], bins=bins, labels=False)
+	def _cat(s: float) -> str:
+		return "Prosperous" if s >= 0.6 else "Neutral" if s >= 0.35 else "Struggling"
 
-	# Get bin edges (left edges + final right edge)
-	x_intervals = pd.cut(df[x_col], bins=bins).cat.categories
-	x_bins = [float(interval.left) for interval in x_intervals] + [float(x_intervals[-1].right)]
-	y_intervals = pd.cut(df[y_col], bins=bins).cat.categories
-	y_bins = [float(interval.left) for interval in y_intervals] + [float(y_intervals[-1].right)]
+	employers = [
+		{
+			"id":            int(row["employerId"]),
+			"avg_rate":      round(float(row["avg_rate"]), 2),
+			"job_count":     int(row["job_count"]),
+			"stable":        int(row["stable"]),
+			"departed":      int(row["departed"]),
+			"arrived":       int(row["arrived"]),
+			"turnover_rate": round(float(row["turnover_rate"]), 3),
+			"score":         float(row["health_score"]),
+			"category":      _cat(float(row["health_score"])),
+			"activity":      [act_map.get(int(row["employerId"]), {}).get(m, 0) for m in months_list],
+		}
+		for _, row in health_df.sort_values("health_score", ascending=False).iterrows()
+	]
 
-	# pivot counts
-	pivot = df.groupby(["_xb", "_yb"]).size().rename("count").reset_index()
+	html = _render_business_health_page_html({"employers": employers, "months": months_list})
+	return html, 200, {"Content-Type": "text/html; charset=utf-8"}
 
-	counts = [[0 for _ in range(bins)] for _ in range(bins)]
-	for _, row in pivot.iterrows():
-			i = int(row["_xb"]) if not pd.isna(row["_xb"]) else None
-			j = int(row["_yb"]) if not pd.isna(row["_yb"]) else None
-			if i is None or j is None:
-					continue
-			if 0 <= i < bins and 0 <= j < bins:
-					counts[i][j] = int(row["count"])
 
-	# scatter points with bin indices
-	points = []
-	for idx, r in df.reset_index().iterrows():
-			points.append({
-					"id": int(r["index"]),
-					"x": float(r[x_col]),
-					"y": float(r[y_col]),
-					"xb": int(r["_xb"]),
-					"yb": int(r["_yb"]),
-			})
+def _render_business_health_page_html(data: dict) -> str:
+	import json as _json
 
-	import json
-
-	page_template = """
-<!doctype html>
+	page = r"""<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Paired Scatter & Heatmap</title>
+<title>Business Health Dashboard</title>
 <style>
-	body { font-family: Arial, sans-serif; margin: 8px; }
-	.container { display:flex; gap:16px; align-items:flex-start; }
-	.panel { border:1px solid #ddd; padding:8px; box-shadow:0 1px 3px rgba(0,0,0,0.06); }
-	.panel h3 { margin:4px 0 8px 0; font-size:14px; }
-	.muted { opacity:0.1; }
-	.highlight { stroke: #f00; stroke-width:2px; }
+* { box-sizing: border-box; }
+body { margin: 0; font-family: Arial, sans-serif; background: #f4f5f7; color: #222; }
+.page { max-width: 1380px; margin: 0 auto; padding: 20px; }
+
+/* header */
+.dash-header { background: #fff; border-radius: 10px; padding: 16px 20px; margin-bottom: 14px;
+  box-shadow: 0 1px 4px rgba(0,0,0,.1); }
+.dash-header h2 { margin: 0 0 4px; font-size: 18px; }
+.dash-sub { font-size: 12px; color: #888; margin: 0 0 8px; }
+.dash-note { font-size: 10px; color: #b00; background: #fff8f0; border: 1px solid #f5c6a0;
+  border-radius: 4px; padding: 4px 8px; display: inline-block; margin-bottom: 10px; }
+
+/* category legend / filter */
+.cat-legend { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 11px; }
+.cat-btn { display: flex; align-items: center; gap: 5px; cursor: pointer; padding: 3px 8px;
+  border-radius: 12px; border: 1.5px solid transparent; user-select: none; transition: opacity .1s; }
+.cat-btn:hover { opacity: .8; }
+.cat-btn.off { opacity: .3; }
+.cat-swatch { width: 10px; height: 10px; border-radius: 50%; }
+.deselect-btn { margin-left: 8px; font-size: 10px; padding: 3px 10px; cursor: pointer;
+  border: 1px solid #ccc; border-radius: 10px; background: #f5f5f5; }
+.deselect-btn:hover { background: #e8e8e8; }
+
+/* details bar */
+.details-bar { font-size: 11px; color: #444; margin-top: 8px; min-height: 22px; line-height: 1.6; }
+
+/* chart grid */
+.charts-top { display: grid; grid-template-columns: 3fr 2fr; gap: 14px; margin-bottom: 14px; }
+.charts-bottom { display: grid; grid-template-columns: 2fr 3fr; gap: 14px; }
+
+.panel { background: #fff; border-radius: 10px; padding: 14px 16px;
+  box-shadow: 0 1px 4px rgba(0,0,0,.1); overflow: hidden; }
+.panel h3 { margin: 0 0 3px; font-size: 13px; color: #333; }
+.panel-sub { font-size: 10px; color: #aaa; margin: 0 0 8px; }
+
+/* ranking scroll */
+.rank-scroll { overflow-y: auto; max-height: 420px; }
+.rank-ctrl { font-size: 11px; margin-bottom: 8px; }
+.rank-ctrl select { font-size: 11px; padding: 2px 4px; }
+
+/* size scroll */
+.size-scroll { overflow-y: auto; max-height: 380px; }
+
+/* color legend bar */
+.grad-legend { display: flex; align-items: center; gap: 6px; font-size: 10px;
+  color: #888; margin-bottom: 6px; }
+
+/* shared tooltip */
+.tooltip { position: fixed; background: rgba(255,255,255,.97); border: 1px solid #ddd;
+  padding: 7px 10px; font-size: 11px; border-radius: 5px; pointer-events: none;
+  opacity: 0; transition: opacity .1s; box-shadow: 0 2px 8px rgba(0,0,0,.12);
+  line-height: 1.65; z-index: 100; max-width: 240px; }
+
+.axis text { font-size: 9px; fill: #666; }
+.axis path, .axis line { stroke: #ddd; }
+
+@media (max-width: 900px) {
+  .charts-top, .charts-bottom { grid-template-columns: 1fr; }
+}
 </style>
-<script src="https://d3js.org/d3.v7.min.js"></script>
 </head>
 <body>
-<div class="container">
-	<div class="panel" id="scatterPanel" style="flex:1;">
-		<h3>Scatter: __X_COL__ vs __Y_COL__</h3>
-		<svg id="scatter" width="600" height="500"></svg>
-	</div>
-	<div class="panel" id="heatmapPanel" style="width:420px;">
-		<h3>Heatmap (bins=__BINS__)</h3>
-		<svg id="heatmap" width="420" height="420"></svg>
-	</div>
+<div class="page">
+
+  <div class="dash-header">
+    <h2>Business Health Dashboard</h2>
+    <p class="dash-sub">Focus: Which businesses appear prosperous or struggling?  Click any employer in any chart to highlight it across all views.</p>
+    <div class="dash-note">&#9432; Health score is <strong>derived/estimated</strong>: 0.25×(jobs) + 0.25×(avg rate) + 0.25×(stable) &minus; 0.25×(turnover rate). Not an official economic measure.</div>
+    <div class="cat-legend" id="cat-legend">
+      <span style="font-size:11px;color:#666;margin-right:4px;">Filter:</span>
+    </div>
+    <div class="details-bar" id="details-bar">Click any employer in any chart to see details here.</div>
+  </div>
+
+  <div class="charts-top">
+    <!-- SCATTER -->
+    <div class="panel">
+      <h3>Prosperity Scatter</h3>
+      <p class="panel-sub">x = avg hourly rate &nbsp;|&nbsp; y = job listings &nbsp;|&nbsp; size = stable workers &nbsp;|&nbsp; colour = health score</p>
+      <div class="grad-legend">
+        <span>Low score</span>
+        <canvas id="grad-canvas" width="120" height="9" style="border-radius:3px"></canvas>
+        <span>High score</span>
+        &nbsp;&nbsp;
+        <svg width="56" height="14">
+          <circle cx="7" cy="7" r="3" fill="#888"/>
+          <circle cx="26" cy="7" r="6" fill="#888"/>
+          <circle cx="48" cy="7" r="9" fill="#888"/>
+        </svg>
+        <span>= stable workers</span>
+      </div>
+      <svg id="scatter-svg"></svg>
+    </div>
+
+    <!-- RANKING -->
+    <div class="panel">
+      <h3>Health Ranking</h3>
+      <p class="panel-sub">Derived score per employer. Colour = Prosperous / Neutral / Struggling.</p>
+      <div class="rank-ctrl">
+        Sort:
+        <select id="rank-sort" onchange="drawRanking()">
+          <option value="score">Health Score</option>
+          <option value="turnover_rate">Turnover Rate</option>
+          <option value="avg_rate">Avg Rate</option>
+          <option value="stable">Stable Workers</option>
+        </select>
+        <select id="rank-dir" onchange="drawRanking()">
+          <option value="desc">Desc</option>
+          <option value="asc">Asc</option>
+        </select>
+        &nbsp;
+        <label><input type="checkbox" id="rank-top" checked onchange="drawRanking()"> Top 40</label>
+      </div>
+      <div class="rank-scroll">
+        <svg id="ranking-svg"></svg>
+      </div>
+    </div>
+  </div>
+
+  <div class="charts-bottom">
+    <!-- SIZE & WAGE -->
+    <div class="panel">
+      <h3>Employer Size &amp; Wage Distribution</h3>
+      <p class="panel-sub">Bar = job listings count &nbsp;|&nbsp; colour = avg hourly rate (yellow&rarr;red = low&rarr;high)</p>
+      <div class="size-scroll">
+        <svg id="size-svg"></svg>
+      </div>
+    </div>
+
+    <!-- ACTIVITY -->
+    <div class="panel">
+      <h3>Workplace Activity Over Time</h3>
+      <p class="panel-sub">Monthly Workplace check-ins per employer (CheckinJournal). All employers shown as grey lines; selected employer highlighted.</p>
+      <svg id="activity-svg"></svg>
+    </div>
+  </div>
+
 </div>
+<div class="tooltip" id="tip"></div>
 
+<script src="https://d3js.org/d3.v7.min.js"></script>
 <script>
-	const points = __POINTS__;
-	const counts = __COUNTS__;
-	const xBins = __XBINS__;
-	const yBins = __YBINS__;
+const DATA = __DATA__;
 
-	// Scatter
-	const sWidth = 600, sHeight = 500, margin = {top:20,right:20,bottom:40,left:50};
-	const sx = d3.scaleLinear().domain(d3.extent(points, d=>d.x)).nice().range([margin.left, sWidth - margin.right]);
-	const sy = d3.scaleLinear().domain(d3.extent(points, d=>d.y)).nice().range([sHeight - margin.bottom, margin.top]);
-	const sSvg = d3.select('#scatter');
-	sSvg.selectAll('*').remove();
-	sSvg.append('g').attr('transform', `translate(0,0)`);
+// ── shared state ───────────────────────────────────────────
+let selectedId = null;
+const hiddenCats = new Set();
+const CAT_COLORS = {Prosperous:'#1a9850', Neutral:'#e6ab02', Struggling:'#d73027'};
+const scoreColor = d3.scaleSequential(d3.interpolateRdYlGn).domain([0, 1]);
+const tip = d3.select('#tip');
 
-	sSvg.selectAll('circle').data(points).join('circle')
-		.attr('cx', d=>sx(d.x)).attr('cy', d=>sy(d.y)).attr('r', 3)
-		.attr('fill', '#1f77b4')
-		.attr('data-xb', d=>d.xb).attr('data-yb', d=>d.yb)
-		.on('mouseover', (event,d)=>{ highlightBin(d.xb, d.yb); })
-		.on('mouseout', ()=>{ clearHighlights(); });
+function isVis(d) { return !hiddenCats.has(d.category); }
 
-	sSvg.append('g').attr('transform', `translate(0,${sHeight - margin.bottom})`)
-		.call(d3.axisBottom(sx));
-	sSvg.append('g').attr('transform', `translate(${margin.left},0)`)
-		.call(d3.axisLeft(sy));
+function selectEmployer(id) {
+  selectedId = (selectedId === id) ? null : id;
+  applySelection();
+  updateDetailsBar();
+}
 
-	// Heatmap
-	const hSize = 420;
-	const cellW = hSize / counts.length;
-	const cellH = hSize / counts[0].length;
-	const hSvg = d3.select('#heatmap');
-	hSvg.selectAll('*').remove();
+function applySelection() {
+  // scatter dots
+  d3.selectAll('.s-dot')
+    .attr('opacity', d => !isVis(d) ? 0 : selectedId == null ? 0.85 : d.id === selectedId ? 1 : 0.07)
+    .attr('stroke', d => d.id === selectedId ? '#000' : '#fff')
+    .attr('stroke-width', d => d.id === selectedId ? 2.5 : 0.7)
+    .attr('r', d => d.id === selectedId ? sizeScale(d.stable) * 1.35 : sizeScale(d.stable));
+  d3.selectAll('.s-dot').filter(d => d.id === selectedId).raise();
 
-	const flat = counts.flat();
-	const color = d3.scaleSequential(d3.interpolateYlOrRd).domain([0, d3.max(flat)]);
+  // ranking bars
+  d3.selectAll('.r-bar')
+    .attr('opacity', d => !isVis(d) ? 0 : selectedId == null ? 0.9 : d.id === selectedId ? 1 : 0.1);
+  d3.selectAll('.r-val')
+    .attr('opacity', d => !isVis(d) ? 0 : selectedId == null ? 1 : d.id === selectedId ? 1 : 0.15);
 
-	const cells = [];
-	for(let i=0;i<counts.length;i++){
-		for(let j=0;j<counts[i].length;j++){
-			cells.push({i:i,j:j,count:counts[i][j]});
-		}
-	}
+  // size bars
+  d3.selectAll('.sz-bar')
+    .attr('opacity', d => !isVis(d) ? 0 : selectedId == null ? 0.85 : d.id === selectedId ? 1 : 0.08);
+  d3.selectAll('.sz-val')
+    .attr('opacity', d => !isVis(d) ? 0 : selectedId == null ? 0.7 : d.id === selectedId ? 1 : 0.1);
 
-	hSvg.selectAll('rect').data(cells).join('rect')
-		.attr('x', d=>d.i*cellW)
-		.attr('y', d=>hSize - (d.j+1)*cellH)
-		.attr('width', cellW)
-		.attr('height', cellH)
-		.attr('fill', d=> color(d.count))
-		.attr('stroke', '#eee')
-		.attr('data-i', d=>d.i).attr('data-j', d=>d.j)
-		.on('mouseover', (event,d)=>{ highlightBin(d.i,d.j); })
-		.on('mouseout', ()=>{ clearHighlights(); });
+  // activity lines
+  d3.selectAll('.act-line')
+    .attr('stroke', d => selectedId == null ? (isVis(d) ? '#bbb' : '#eee') : d.id === selectedId ? CAT_COLORS[d.category] : '#ddd')
+    .attr('stroke-width', d => d.id === selectedId ? 2.8 : 1)
+    .attr('opacity', d => !isVis(d) ? 0 : selectedId == null ? 0.5 : d.id === selectedId ? 1 : 0.06);
+  d3.selectAll('.act-line').filter(d => d.id === selectedId).raise();
+}
 
-	// Highlighting
-	function highlightBin(i,j){
-		// highlight heatmap cell
-		hSvg.selectAll('rect').classed('muted', true).classed('highlight', false);
-		hSvg.selectAll('rect').filter(function(){ return +this.getAttribute('data-i')===i && +this.getAttribute('data-j')===j; }).classed('muted', false).classed('highlight', true).raise();
+function updateDetailsBar() {
+  const el = document.getElementById('details-bar');
+  if (selectedId == null) {
+    el.innerHTML = 'Click any employer in any chart to see details here.';
+    el.style.color = '#aaa';
+    return;
+  }
+  const d = DATA.employers.find(e => e.id === selectedId);
+  if (!d) return;
+  el.style.color = '#333';
+  const col = CAT_COLORS[d.category];
+  const peak = DATA.months.length ? Math.max(...d.activity) : '—';
+  el.innerHTML =
+    `<strong>Employer ${d.id}</strong> &nbsp;` +
+    `<span style="color:${col};font-weight:600">${d.category}</span> &nbsp;|&nbsp; ` +
+    `Score: <strong>${d.score.toFixed(3)}</strong> <em style="color:#aaa">(est.)</em> &nbsp;|&nbsp; ` +
+    `Avg rate: <strong>$${d.avg_rate}/hr</strong> &nbsp;|&nbsp; ` +
+    `Jobs: <strong>${d.job_count}</strong> &nbsp;|&nbsp; ` +
+    `Stable: <strong>${d.stable}</strong> &nbsp;|&nbsp; ` +
+    `Departed: <strong>${d.departed}</strong> Arrived: <strong>${d.arrived}</strong> &nbsp;|&nbsp; ` +
+    `Turnover: <strong>${(d.turnover_rate*100).toFixed(1)}%</strong> &nbsp;|&nbsp; ` +
+    `Peak activity: <strong>${peak}</strong> check-ins &nbsp; ` +
+    `<button class="deselect-btn" onclick="selectEmployer(${d.id})">&#10005; Deselect</button>`;
+}
 
-		// highlight scatter points in that bin
-		sSvg.selectAll('circle').classed('muted', true).classed('highlight', false);
-		sSvg.selectAll('circle').filter(function(){ return +this.getAttribute('data-xb')===i && +this.getAttribute('data-yb')===j; }).classed('muted', false).classed('highlight', true).raise();
-	}
+// ── category legend ────────────────────────────────────────
+const catLegend = d3.select('#cat-legend');
+['Prosperous','Neutral','Struggling'].forEach(cat => {
+  const btn = catLegend.append('div').attr('class','cat-btn').attr('id',`cat-btn-${cat}`)
+    .style('border-color', CAT_COLORS[cat])
+    .on('click', () => {
+      if (hiddenCats.has(cat)) hiddenCats.delete(cat); else hiddenCats.add(cat);
+      d3.select(`#cat-btn-${cat}`).classed('off', hiddenCats.has(cat));
+      applySelection();
+    });
+  btn.append('div').attr('class','cat-swatch').style('background', CAT_COLORS[cat]);
+  btn.append('span').text(cat);
+});
+catLegend.append('button').attr('class','deselect-btn').text('Clear selection')
+  .on('click', () => { selectedId = null; applySelection(); updateDetailsBar(); });
 
-	function clearHighlights(){
-		hSvg.selectAll('rect').classed('muted', false).classed('highlight', false);
-		sSvg.selectAll('circle').classed('muted', false).classed('highlight', false);
-	}
+// ── gradient legend canvas ─────────────────────────────────
+const canvas = document.getElementById('grad-canvas');
+const ctx = canvas.getContext('2d');
+const grd = ctx.createLinearGradient(0,0,120,0);
+grd.addColorStop(0,'#d73027'); grd.addColorStop(0.5,'#ffffbf'); grd.addColorStop(1,'#1a9850');
+ctx.fillStyle = grd; ctx.fillRect(0,0,120,9);
 
+// ── SCATTER CHART ──────────────────────────────────────────
+const scatterMargin = {top:16, right:16, bottom:52, left:52};
+const scatterW = 540 - scatterMargin.left - scatterMargin.right;
+const scatterH = 380 - scatterMargin.top  - scatterMargin.bottom;
+
+const sizeScale = d3.scaleSqrt()
+  .domain([0, d3.max(DATA.employers, d => d.stable) || 1]).range([3, 17]);
+
+const sx = d3.scaleLinear().domain(d3.extent(DATA.employers, d => d.avg_rate)).nice().range([0, scatterW]);
+const sy = d3.scaleLinear().domain([0, d3.max(DATA.employers, d => d.job_count)*1.12]).nice().range([scatterH, 0]);
+
+const scatterSvg = d3.select('#scatter-svg')
+  .attr('width',  scatterW + scatterMargin.left + scatterMargin.right)
+  .attr('height', scatterH + scatterMargin.top  + scatterMargin.bottom)
+  .append('g').attr('transform', `translate(${scatterMargin.left},${scatterMargin.top})`);
+
+// grid
+scatterSvg.append('g').call(d3.axisLeft(sy).tickSize(-scatterW).tickFormat(''))
+  .call(g => { g.select('.domain').remove(); g.selectAll('.tick line').attr('stroke','#f0f0f0'); });
+scatterSvg.append('g').attr('transform',`translate(0,${scatterH})`)
+  .call(d3.axisBottom(sx).tickSize(-scatterH).tickFormat(''))
+  .call(g => { g.select('.domain').remove(); g.selectAll('.tick line').attr('stroke','#f0f0f0'); });
+
+scatterSvg.append('g').attr('class','axis').attr('transform',`translate(0,${scatterH})`).call(d3.axisBottom(sx).ticks(6));
+scatterSvg.append('g').attr('class','axis').call(d3.axisLeft(sy).ticks(5));
+
+scatterSvg.append('text').attr('x',scatterW/2).attr('y',scatterH+40)
+  .attr('text-anchor','middle').attr('font-size',11).attr('fill','#666').text('Average Hourly Rate ($/hr)');
+scatterSvg.append('text').attr('transform','rotate(-90)').attr('x',-scatterH/2).attr('y',-38)
+  .attr('text-anchor','middle').attr('font-size',11).attr('fill','#666').text('Job Listings');
+
+scatterSvg.selectAll('.s-dot').data(DATA.employers).join('circle')
+  .attr('class','s-dot').attr('cx', d => sx(d.avg_rate)).attr('cy', d => sy(d.job_count))
+  .attr('r', d => sizeScale(d.stable))
+  .attr('fill', d => scoreColor(d.score))
+  .attr('stroke','#fff').attr('stroke-width',0.7).attr('opacity',0.85).attr('cursor','pointer')
+  .on('mouseover', (event,d) => {
+    tip.style('opacity',1)
+      .html(`<strong>Employer ${d.id}</strong> &mdash; ${d.category}<br>Score: ${d.score.toFixed(3)} <em>(est.)</em><br>Rate: $${d.avg_rate}/hr &nbsp; Jobs: ${d.job_count}<br>Stable: ${d.stable} &nbsp; Turnover: ${(d.turnover_rate*100).toFixed(1)}%<br><em style="color:#aaa">Click to select all charts</em>`)
+      .style('left',(event.clientX+14)+'px').style('top',(event.clientY-50)+'px');
+  })
+  .on('mouseout', () => tip.style('opacity',0))
+  .on('click', (_,d) => selectEmployer(d.id));
+
+// ── HEALTH RANKING ─────────────────────────────────────────
+function drawRanking() {
+  const key  = document.getElementById('rank-sort').value;
+  const dir  = document.getElementById('rank-dir').value;
+  const topN = document.getElementById('rank-top').checked;
+
+  let recs = [...DATA.employers];
+  recs.sort((a,b) => dir === 'desc' ? b[key] - a[key] : a[key] - b[key]);
+  if (topN) recs = recs.slice(0, 40);
+
+  const margin = {top:4, right:56, bottom:20, left:74};
+  const W = 360 - margin.left - margin.right;
+  const barH = 13, gap = 3;
+  const H = recs.length * (barH + gap);
+
+  d3.select('#ranking-svg').selectAll('*').remove();
+  const svg = d3.select('#ranking-svg')
+    .attr('width',  W + margin.left + margin.right)
+    .attr('height', H + margin.top  + margin.bottom)
+    .append('g').attr('transform',`translate(${margin.left},${margin.top})`);
+
+  const x = d3.scaleLinear().domain([0,1]).range([0,W]);
+  const y = d3.scaleBand().domain(recs.map(d=>`E${d.id}`)).range([0,H]).padding(0.15);
+
+  svg.append('g').attr('transform',`translate(0,${H})`).attr('class','axis')
+    .call(d3.axisBottom(x).ticks(4).tickFormat(d3.format('.1f')));
+  svg.append('g').attr('class','axis').call(d3.axisLeft(y).tickSize(0))
+    .call(g => g.select('.domain').remove()).selectAll('text').attr('font-size','9px');
+
+  svg.selectAll('.r-bar').data(recs).join('rect').attr('class','r-bar')
+    .attr('x',0).attr('y', d=>y(`E${d.id}`))
+    .attr('width', d=>x(d.score)).attr('height', y.bandwidth())
+    .attr('fill', d=>CAT_COLORS[d.category]).attr('rx',2).attr('opacity',0.9).attr('cursor','pointer')
+    .on('mouseover',(event,d) => {
+      tip.style('opacity',1)
+        .html(`<strong>Employer ${d.id}</strong> &mdash; ${d.category}<br>Score: ${d.score.toFixed(3)}<br>Rate: $${d.avg_rate}/hr &nbsp; Turnover: ${(d.turnover_rate*100).toFixed(1)}%`)
+        .style('left',(event.clientX+14)+'px').style('top',(event.clientY-36)+'px');
+    })
+    .on('mouseout', () => tip.style('opacity',0))
+    .on('click', (_,d) => selectEmployer(d.id));
+
+  svg.selectAll('.r-val').data(recs).join('text').attr('class','r-val')
+    .attr('x', d=>x(d.score)+3).attr('y', d=>y(`E${d.id}`)+y.bandwidth()/2)
+    .attr('dy','0.35em').attr('font-size',8).attr('fill','#555').text(d=>d.score.toFixed(2));
+
+  applySelection();
+}
+
+// ── SIZE & WAGE CHART ──────────────────────────────────────
+(function initSizeChart() {
+  const recs = [...DATA.employers].sort((a,b)=>b.job_count-a.job_count).slice(0,35);
+
+  const rateColor = d3.scaleSequential(d3.interpolateYlOrRd)
+    .domain([0, d3.max(DATA.employers, d=>d.avg_rate)]);
+
+  const margin = {top:4, right:60, bottom:20, left:74};
+  const W = 360 - margin.left - margin.right;
+  const barH = 13, gap = 3;
+  const H = recs.length * (barH + gap);
+
+  const svg = d3.select('#size-svg')
+    .attr('width',  W + margin.left + margin.right)
+    .attr('height', H + margin.top  + margin.bottom)
+    .append('g').attr('transform',`translate(${margin.left},${margin.top})`);
+
+  const x = d3.scaleLinear().domain([0, d3.max(recs,d=>d.job_count)*1.05]).nice().range([0,W]);
+  const y = d3.scaleBand().domain(recs.map(d=>`E${d.id}`)).range([0,H]).padding(0.15);
+
+  svg.append('g').attr('transform',`translate(0,${H})`).attr('class','axis')
+    .call(d3.axisBottom(x).ticks(5));
+  svg.append('g').attr('class','axis').call(d3.axisLeft(y).tickSize(0))
+    .call(g => g.select('.domain').remove()).selectAll('text').attr('font-size','9px');
+
+  svg.selectAll('.sz-bar').data(recs).join('rect').attr('class','sz-bar')
+    .attr('x',0).attr('y', d=>y(`E${d.id}`))
+    .attr('width', d=>x(d.job_count)).attr('height', y.bandwidth())
+    .attr('fill', d=>rateColor(d.avg_rate)).attr('rx',2).attr('opacity',0.85).attr('cursor','pointer')
+    .on('mouseover',(event,d) => {
+      tip.style('opacity',1)
+        .html(`<strong>Employer ${d.id}</strong><br>Job listings: ${d.job_count}<br>Avg rate: $${d.avg_rate}/hr<br>Score: ${d.score.toFixed(3)} &mdash; ${d.category}`)
+        .style('left',(event.clientX+14)+'px').style('top',(event.clientY-36)+'px');
+    })
+    .on('mouseout', () => tip.style('opacity',0))
+    .on('click', (_,d) => selectEmployer(d.id));
+
+  svg.selectAll('.sz-val').data(recs).join('text').attr('class','sz-val')
+    .attr('x', d=>x(d.job_count)+3).attr('y', d=>y(`E${d.id}`)+y.bandwidth()/2)
+    .attr('dy','0.35em').attr('font-size',8).attr('fill','#666').text(d=>`$${d.avg_rate}`);
+})();
+
+// ── ACTIVITY CHART ─────────────────────────────────────────
+(function initActivity() {
+  if (!DATA.months.length) {
+    d3.select('#activity-svg').append('text').attr('x',20).attr('y',40)
+      .attr('font-size',12).attr('fill','#aaa').text('No check-in data available.');
+    return;
+  }
+  const parseM = d3.timeParse('%Y-%m');
+  const fmtM   = d3.timeFormat('%b %Y');
+  const months = DATA.months.map(parseM);
+
+  const margin = {top:16, right:16, bottom:52, left:52};
+  const W = 680 - margin.left - margin.right;
+  const H = 280 - margin.top  - margin.bottom;
+
+  const x = d3.scaleTime().domain(d3.extent(months)).range([0,W]);
+  const maxAct = d3.max(DATA.employers, d => d3.max(d.activity) || 0) || 1;
+  const y = d3.scaleLinear().domain([0, maxAct * 1.1]).nice().range([H, 0]);
+
+  const actSvg = d3.select('#activity-svg')
+    .attr('width',  W + margin.left + margin.right)
+    .attr('height', H + margin.top  + margin.bottom)
+    .append('g').attr('transform',`translate(${margin.left},${margin.top})`);
+
+  actSvg.append('g').attr('class','axis').call(d3.axisLeft(y).ticks(4));
+  actSvg.append('g').attr('class','axis').attr('transform',`translate(0,${H})`)
+    .call(d3.axisBottom(x).ticks(d3.timeMonth.every(2)).tickFormat(fmtM))
+    .selectAll('text').attr('transform','rotate(-30)').style('text-anchor','end');
+
+  actSvg.append('text').attr('transform','rotate(-90)').attr('x',-H/2).attr('y',-38)
+    .attr('text-anchor','middle').attr('font-size',10).attr('fill','#888').text('Workplace check-ins');
+
+  const lineGen = d3.line().x((_,i)=>x(months[i])).y(v=>y(v)).defined(v=>v>=0);
+
+  actSvg.selectAll('.act-line').data(DATA.employers).join('path')
+    .attr('class','act-line').attr('fill','none')
+    .attr('stroke','#bbb').attr('stroke-width',1).attr('opacity',0.5)
+    .attr('d', d => lineGen(d.activity)).attr('cursor','pointer')
+    .on('mouseover',(event,d) => {
+      tip.style('opacity',1)
+        .html(`<strong>Employer ${d.id}</strong> &mdash; ${d.category}<br>Peak: ${d3.max(d.activity)} check-ins<br>Score: ${d.score.toFixed(3)}<br><em style="color:#aaa">Click to select all charts</em>`)
+        .style('left',(event.clientX+14)+'px').style('top',(event.clientY-50)+'px');
+    })
+    .on('mouseout', () => tip.style('opacity',0))
+    .on('click', (_,d) => selectEmployer(d.id));
+})();
+
+// ── init ───────────────────────────────────────────────────
+drawRanking();
+updateDetailsBar();
 </script>
 </body>
-</html>
-"""
+</html>"""
 
-	page = page_template.replace('__POINTS__', json.dumps(points))
-	page = page.replace('__COUNTS__', json.dumps(counts))
-	page = page.replace('__XBINS__', json.dumps(x_bins))
-	page = page.replace('__YBINS__', json.dumps(y_bins))
-	page = page.replace('__X_COL__', x_col)
-	page = page.replace('__Y_COL__', y_col)
-	page = page.replace('__BINS__', str(bins))
+	return page.replace("__DATA__", _json.dumps(data))
 
-	return page, 200, {"Content-Type": "text/html; charset=utf-8"}
+
+@app.route("/api/overall-view-page", methods=["GET"])
+def overall_view_page():
+	"""Combined Overall View dashboard: KPIs + 4 linked charts in one page."""
+	if not DB_PATH.exists():
+		return jsonify({"error": f"Database not found: {DB_PATH}"}), 404
+
+	conn = _get_db_connection()
+	try:
+		health_df = _compute_employer_health_scores(conn)
+
+		fin_df = pd.read_sql_query(
+			"""
+			SELECT strftime('%Y-%m', timestamp) AS month,
+			       SUM(CASE WHEN category = 'Wage' THEN amount ELSE 0 END) AS wage,
+			       SUM(CASE WHEN category IN ('Food','Shelter','Recreation','Education')
+			                THEN ABS(amount) ELSE 0 END) AS cost_of_living
+			FROM financialjournal
+			GROUP BY month ORDER BY month
+			""",
+			conn,
+		)
+
+		net_df = pd.read_sql_query(
+			"""
+			SELECT participantId,
+			       SUM(CASE WHEN category='Wage' THEN amount ELSE 0 END) -
+			       SUM(CASE WHEN category IN ('Food','Shelter','Recreation','Education')
+			                THEN ABS(amount) ELSE 0 END) AS net_income
+			FROM financialjournal GROUP BY participantId
+			""",
+			conn,
+		)
+
+		earners_row = pd.read_sql_query(
+			"SELECT COUNT(DISTINCT participantId) AS n FROM financialjournal WHERE category='Wage'",
+			conn,
+		)
+
+		emp_df  = pd.read_sql_query("SELECT employerId, location FROM employers", conn)
+		jobs_df = pd.read_sql_query(
+			"SELECT employerId, COUNT(*) AS job_count, AVG(hourlyRate) AS avg_rate FROM jobs GROUP BY employerId",
+			conn,
+		)
+		start_df, end_df = _get_job_transitions(conn)
+	finally:
+		conn.close()
+
+	# ── KPIs ──────────────────────────────────────────────────────────────
+	total_wages    = round(float(fin_df["wage"].sum()),           2) if not fin_df.empty else 0
+	total_spending = round(float(fin_df["cost_of_living"].sum()), 2) if not fin_df.empty else 0
+	median_net     = round(float(net_df["net_income"].median()),  2) if not net_df.empty else 0
+	active_emp     = int(health_df["employerId"].nunique())           if not health_df.empty else 0
+	avg_turnover   = round(float(health_df["turnover_rate"].mean()) * 100, 1) if not health_df.empty else 0
+	active_earners = int(earners_row["n"].iloc[0])                    if not earners_row.empty else 0
+
+	def _fmt(n):
+		if abs(n) >= 1_000_000:
+			return f"${n/1_000_000:.1f}M"
+		if abs(n) >= 1_000:
+			return f"${n/1_000:.0f}K"
+		return f"${n:.0f}"
+
+	kpis = {
+		"total_wages":      _fmt(total_wages),
+		"total_spending":   _fmt(total_spending),
+		"median_net":       _fmt(median_net),
+		"turnover_rate":    f"{avg_turnover}%",
+		"active_employers": str(active_emp),
+		"active_earners":   str(active_earners),
+	}
+
+	# ── Line chart data ────────────────────────────────────────────────────
+	if not fin_df.empty:
+		fin_df["net_income"] = fin_df["wage"] - fin_df["cost_of_living"]
+		line_data = {
+			"months": fin_df["month"].tolist(),
+			"series": [
+				{"name": "Wage",           "values": [round(v, 2) for v in fin_df["wage"].tolist()],           "color": "#2ca02c"},
+				{"name": "Cost of Living", "values": [round(v, 2) for v in fin_df["cost_of_living"].tolist()], "color": "#d62728"},
+				{"name": "Net Income",     "values": [round(v, 2) for v in fin_df["net_income"].tolist()],     "color": "#1f77b4"},
+			],
+		}
+	else:
+		line_data = {"months": [], "series": []}
+
+	# ── Employer data (scatter + ranking) ──────────────────────────────────
+	def _cat(s):
+		return "Prosperous" if s >= 0.6 else "Neutral" if s >= 0.35 else "Struggling"
+
+	employers = []
+	if not health_df.empty:
+		employers = [
+			{
+				"id":            int(row["employerId"]),
+				"avg_rate":      round(float(row["avg_rate"]),      2),
+				"job_count":     int(row["job_count"]),
+				"stable":        int(row["stable"]),
+				"departed":      int(row["departed"]),
+				"arrived":       int(row["arrived"]),
+				"turnover_rate": round(float(row["turnover_rate"]), 3),
+				"score":         round(float(row["health_score"]),  3),
+				"category":      _cat(float(row["health_score"])),
+			}
+			for _, row in health_df.sort_values("health_score", ascending=False).iterrows()
+		]
+
+	# ── Symbol map data ────────────────────────────────────────────────────
+	health_by_id = {e["id"]: e for e in employers}
+	emp_df = emp_df.merge(jobs_df, on="employerId", how="left").fillna({"job_count": 1, "avg_rate": 0})
+
+	if not start_df.empty and not end_df.empty:
+		all_emp = set(start_df["employerId"].dropna().astype(int)) | set(end_df["employerId"].dropna().astype(int))
+		turnover_map = {}
+		for eid in all_emp:
+			s = set(start_df[start_df["employerId"] == eid]["participantId"])
+			e = set(end_df[end_df["employerId"]   == eid]["participantId"])
+			turnover_map[int(eid)] = len(s.symmetric_difference(e))
+	else:
+		turnover_map = {}
+
+	symbols = []
+	for _, row in emp_df.iterrows():
+		px, py = _parse_wkt_point(str(row["location"]))
+		if px is None:
+			continue
+		eid = int(row["employerId"])
+		h   = health_by_id.get(eid, {})
+		symbols.append({
+			"id":        eid,
+			"x":         px,
+			"y":         py,
+			"job_count": int(row["job_count"]),
+			"avg_rate":  round(float(row["avg_rate"]), 2),
+			"turnover":  turnover_map.get(eid, 0),
+			"score":     h.get("score",    0.5),
+			"category":  h.get("category", "Neutral"),
+		})
+
+	# ── Buildings for map background ───────────────────────────────────────
+	buildings_path = Path(__file__).resolve().parent / "buildings.json"
+	buildings = []
+	if buildings_path.exists():
+		import json as _jj
+		raw = _jj.loads(buildings_path.read_text(encoding="utf-8"))
+		buildings = [
+			{"coords": b["coords"], "type": b.get("buildingType", "")}
+			for b in raw if b.get("coords")
+		]
+
+	data = {
+		"kpis":      kpis,
+		"line":      line_data,
+		"employers": employers,
+		"symbols":   symbols,
+		"buildings": buildings,
+	}
+	html = _render_overall_view_html(data)
+	return html, 200, {"Content-Type": "text/html; charset=utf-8"}
+
+
+def _render_overall_view_html(data: dict) -> str:
+	import json as _json
+
+	page = r"""<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8">
+<title>Overall View</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:Arial,sans-serif;background:#f4f5f7;color:#222;padding:16px}
+.kpi-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-bottom:16px}
+.kpi-card{background:#fff;border-radius:10px;padding:14px;box-shadow:0 1px 5px rgba(0,0,0,.1)}
+.kpi-label{font-size:11px;color:#777;margin-bottom:6px}
+.kpi-value{font-size:18px;font-weight:bold}
+.details-bar{background:#e7eef7;border-left:4px solid #2f5d8c;border-radius:6px;padding:8px 14px;
+  font-size:12px;color:#333;margin-bottom:14px;min-height:34px;line-height:1.6}
+.chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.chart-panel{background:#fff;border-radius:10px;padding:14px;box-shadow:0 1px 5px rgba(0,0,0,.1)}
+.chart-panel h3{font-size:14px;margin-bottom:3px}
+.chart-note{font-size:11px;color:#777;margin-bottom:10px}
+.ranking-wrap{overflow-y:auto;max-height:320px}
+.tooltip{position:fixed;background:rgba(20,20,20,.92);color:#fff;padding:7px 11px;border-radius:6px;
+  font-size:12px;pointer-events:none;opacity:0;transition:opacity .12s;line-height:1.6;z-index:999}
+@media(max-width:800px){.kpi-grid{grid-template-columns:repeat(3,1fr)}.chart-grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<div class="kpi-grid">
+  <div class="kpi-card"><div class="kpi-label">Total Resident Wages</div><div class="kpi-value" id="kv-wages">—</div></div>
+  <div class="kpi-card"><div class="kpi-label">Total Resident Spending</div><div class="kpi-value" id="kv-spending">—</div></div>
+  <div class="kpi-card"><div class="kpi-label">Median Net Income</div><div class="kpi-value" id="kv-net">—</div></div>
+  <div class="kpi-card"><div class="kpi-label">Avg Turnover Rate</div><div class="kpi-value" id="kv-turnover">—</div></div>
+  <div class="kpi-card"><div class="kpi-label">Active Employers</div><div class="kpi-value" id="kv-employers">—</div></div>
+  <div class="kpi-card"><div class="kpi-label">Active Wage Earners</div><div class="kpi-value" id="kv-earners">—</div></div>
+</div>
+
+<div class="details-bar" id="details-bar">Click any employer in the ranking, scatter, or map to see details here.</div>
+
+<div class="chart-grid">
+  <div class="chart-panel">
+    <h3>Wages vs Cost of Living Over Time</h3>
+    <p class="chart-note">Monthly totals: wage income, cost of living, net income</p>
+    <div id="ch-line"></div>
+  </div>
+  <div class="chart-panel">
+    <h3>Employer Health Ranking</h3>
+    <p class="chart-note">Sorted by derived health score. Click to highlight across charts.</p>
+    <div class="ranking-wrap"><div id="ch-ranking"></div></div>
+  </div>
+  <div class="chart-panel">
+    <h3>Business Prosperity / Stability Scatterplot</h3>
+    <p class="chart-note">Avg hourly rate vs job count. Dot size = stable workers.</p>
+    <div id="ch-scatter"></div>
+  </div>
+  <div class="chart-panel">
+    <h3>Employer Symbol Map</h3>
+    <p class="chart-note">Position = location. Size = job count. Color = health category.</p>
+    <div id="ch-map"></div>
+  </div>
+</div>
+
+<div class="tooltip" id="tip"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+<script>
+const DATA = __DATA__;
+const K = DATA.kpis;
+document.getElementById('kv-wages').textContent     = K.total_wages;
+document.getElementById('kv-spending').textContent  = K.total_spending;
+document.getElementById('kv-net').textContent       = K.median_net;
+document.getElementById('kv-turnover').textContent  = K.turnover_rate;
+document.getElementById('kv-employers').textContent = K.active_employers;
+document.getElementById('kv-earners').textContent   = K.active_earners;
+
+const CAT_COLOR = {Prosperous:'#2ca02c', Neutral:'#f59e0b', Struggling:'#d62728'};
+const tip = d3.select('#tip');
+let selectedId = null;
+
+function showTip(html, ev){
+  tip.html(html).style('opacity',1)
+    .style('left',(ev.clientX+14)+'px').style('top',(ev.clientY-40)+'px');
+}
+function hideTip(){ tip.style('opacity',0); }
+
+function selectEmployer(id){
+  selectedId = (selectedId === id) ? null : id;
+  updateDetails();
+  drawRanking();
+  drawScatter();
+  drawMap();
+}
+
+function updateDetails(){
+  const bar = document.getElementById('details-bar');
+  if(!selectedId){ bar.textContent='Click any employer in the ranking, scatter, or map to see details here.'; return; }
+  const e = DATA.employers.find(d=>d.id===selectedId);
+  if(!e) return;
+  bar.innerHTML = `<strong>Employer ${e.id}</strong> &nbsp;|&nbsp;
+    Category: <strong style="color:${CAT_COLOR[e.category]}">${e.category}</strong> &nbsp;|&nbsp;
+    Score: <strong>${e.score}</strong> &nbsp;|&nbsp;
+    Jobs: <strong>${e.job_count}</strong> &nbsp;|&nbsp;
+    Avg rate: <strong>$${e.avg_rate}/hr</strong> &nbsp;|&nbsp;
+    Turnover: <strong>${(e.turnover_rate*100).toFixed(1)}%</strong> &nbsp;|&nbsp;
+    Stable: <strong>${e.stable}</strong> &nbsp;|&nbsp;
+    Departed: <strong>${e.departed}</strong> &nbsp;|&nbsp;
+    Arrived: <strong>${e.arrived}</strong>`;
+}
+
+// ── Line chart (standalone — no employer selection) ─────────────────────
+(function drawLine(){
+  const {months, series} = DATA.line;
+  if(!months.length) return;
+  const el = document.getElementById('ch-line');
+  const W = el.clientWidth || 440, H = 270;
+  const m = {top:10,right:70,bottom:38,left:56};
+  const w = W-m.left-m.right, h = H-m.top-m.bottom;
+
+  const svg = d3.select(el).append('svg').attr('width',W).attr('height',H);
+  const g = svg.append('g').attr('transform',`translate(${m.left},${m.top})`);
+
+  const x = d3.scalePoint().domain(months).range([0,w]);
+  const allV = series.flatMap(s=>s.values);
+  const y = d3.scaleLinear().domain([d3.min(allV), d3.max(allV)]).nice().range([h,0]);
+
+  g.append('g').attr('transform',`translate(0,${h})`)
+    .call(d3.axisBottom(x).tickValues(months.filter((_,i)=>i%4===0)).tickSize(-h))
+    .call(ax=>ax.selectAll('.tick line').attr('stroke','#eee'))
+    .call(ax=>ax.select('.domain').remove())
+    .selectAll('text').attr('transform','rotate(-30)').attr('text-anchor','end').attr('font-size',9);
+
+  g.append('g').call(d3.axisLeft(y).ticks(5).tickFormat(d=>'$'+d3.format('.2s')(d)));
+
+  const line = d3.line().x((_,i)=>x(months[i])).y(d=>y(d)).curve(d3.curveMonotoneX);
+
+  series.forEach(s=>{
+    g.append('path').datum(s.values)
+      .attr('fill','none').attr('stroke',s.color).attr('stroke-width',2).attr('d',line);
+    const lx = x(months[months.length-1]);
+    const ly = y(s.values[s.values.length-1]);
+    g.append('text').attr('x',lx+4).attr('y',ly).attr('fill',s.color)
+      .attr('font-size',9).attr('dominant-baseline','middle').text(s.name);
+  });
+})();
+
+// ── Ranking (linked) ────────────────────────────────────────────────────
+function drawRanking(){
+  const el = document.getElementById('ch-ranking');
+  d3.select(el).selectAll('*').remove();
+  const emps = DATA.employers;
+  const W = (el.clientWidth||440), barH = 16;
+  const m = {top:4,right:50,bottom:20,left:60};
+  const H = emps.length*barH+m.top+m.bottom;
+  const w = W-m.left-m.right;
+
+  const svg = d3.select(el).append('svg').attr('width',W).attr('height',H);
+  const g = svg.append('g').attr('transform',`translate(${m.left},${m.top})`);
+
+  const x = d3.scaleLinear().domain([0,1]).range([0,w]);
+  const y = d3.scaleBand().domain(emps.map(d=>d.id)).range([0,emps.length*barH]).padding(0.12);
+
+  g.selectAll('rect').data(emps).join('rect')
+    .attr('x',0).attr('y',d=>y(d.id))
+    .attr('width',d=>x(d.score)).attr('height',y.bandwidth())
+    .attr('fill',d=>CAT_COLOR[d.category])
+    .attr('opacity',d=>!selectedId||selectedId===d.id ? 0.85 : 0.2)
+    .attr('stroke',d=>selectedId===d.id?'#222':'none').attr('stroke-width',1.5)
+    .style('cursor','pointer')
+    .on('mouseover',(ev,d)=>showTip(`Employer ${d.id}<br>${d.category}<br>Score: ${d.score}<br>Jobs: ${d.job_count}`,ev))
+    .on('mouseout',hideTip)
+    .on('click',(_,d)=>selectEmployer(d.id));
+
+  g.append('g').call(d3.axisLeft(y).tickFormat(d=>`Emp ${d}`).tickSize(0))
+    .call(ax=>{ax.select('.domain').remove(); ax.selectAll('text').attr('font-size',9);});
+  g.append('g').attr('transform',`translate(0,${emps.length*barH})`)
+    .call(d3.axisBottom(x).ticks(4).tickFormat(d3.format('.2f')));
+}
+
+// ── Scatter (linked) ────────────────────────────────────────────────────
+function drawScatter(){
+  const el = document.getElementById('ch-scatter');
+  d3.select(el).selectAll('*').remove();
+  const emps = DATA.employers;
+  const W = el.clientWidth||440, H = 480;
+  const m = {top:14,right:16,bottom:40,left:48};
+  const w = W-m.left-m.right, h = H-m.top-m.bottom;
+
+  const svg = d3.select(el).append('svg').attr('width',W).attr('height',H);
+  const g = svg.append('g').attr('transform',`translate(${m.left},${m.top})`);
+
+  const x = d3.scaleLinear().domain(d3.extent(emps,d=>d.avg_rate)).nice().range([0,w]);
+  const y = d3.scaleLinear().domain(d3.extent(emps,d=>d.job_count)).nice().range([h,0]);
+  const r = d3.scaleSqrt().domain([0,d3.max(emps,d=>d.stable)]).range([3,14]);
+
+  g.append('g').attr('transform',`translate(0,${h})`)
+    .call(d3.axisBottom(x).ticks(5).tickFormat(d=>'$'+d));
+  g.append('g').call(d3.axisLeft(y).ticks(5));
+
+  g.append('text').attr('x',w/2).attr('y',h+34).attr('text-anchor','middle')
+    .attr('font-size',11).text('Avg Hourly Rate ($)');
+  g.append('text').attr('transform','rotate(-90)').attr('x',-h/2).attr('y',-36)
+    .attr('text-anchor','middle').attr('font-size',11).text('Job Count');
+
+  g.selectAll('circle').data(emps).join('circle')
+    .attr('cx',d=>x(d.avg_rate)).attr('cy',d=>y(d.job_count)).attr('r',d=>r(d.stable))
+    .attr('fill',d=>CAT_COLOR[d.category])
+    .attr('opacity',d=>!selectedId||selectedId===d.id ? 0.78 : 0.12)
+    .attr('stroke',d=>selectedId===d.id?'#222':'#fff')
+    .attr('stroke-width',d=>selectedId===d.id?2:0.5)
+    .style('cursor','pointer')
+    .on('mouseover',(ev,d)=>showTip(`Employer ${d.id}<br>${d.category}<br>Rate: $${d.avg_rate}/hr<br>Jobs: ${d.job_count}<br>Stable: ${d.stable}`,ev))
+    .on('mouseout',hideTip)
+    .on('click',(_,d)=>selectEmployer(d.id));
+}
+
+// ── Symbol map (linked) ─────────────────────────────────────────────────
+function drawMap(){
+  const el = document.getElementById('ch-map');
+  d3.select(el).selectAll('*').remove();
+  const syms = DATA.symbols, blds = DATA.buildings;
+  const W = el.clientWidth||440, H = 480;
+
+  const TYPE_COLOR = {Commercial:'#3b82f6', Residental:'#007850', School:'#f59e0b'};
+
+  const allX = [...blds.flatMap(b=>b.coords.map(c=>c[0])), ...syms.map(s=>s.x)];
+  const allY = [...blds.flatMap(b=>b.coords.map(c=>c[1])), ...syms.map(s=>s.y)];
+  const x = d3.scaleLinear().domain(d3.extent(allX)).range([8,W-8]);
+  const y = d3.scaleLinear().domain(d3.extent(allY)).range([H-8,8]);
+  const r = d3.scaleSqrt().domain([0,d3.max(syms,s=>s.job_count)]).range([3,12]);
+
+  const svg = d3.select(el).append('svg').attr('width',W).attr('height',H)
+    .style('border','1px solid #e5e7eb').style('border-radius','6px');
+
+  svg.append('g').selectAll('path').data(blds).join('path')
+    .attr('d',b=>b.coords.map((c,i)=>(i?'L':'M')+x(c[0])+','+y(c[1])).join('')+'Z')
+    .attr('fill',b=>TYPE_COLOR[b.type]||'#aaa').attr('opacity',0.2)
+    .attr('stroke','#ccc').attr('stroke-width',0.3);
+
+  svg.selectAll('circle').data(syms).join('circle')
+    .attr('cx',d=>x(d.x)).attr('cy',d=>y(d.y)).attr('r',d=>r(d.job_count))
+    .attr('fill',d=>CAT_COLOR[d.category])
+    .attr('opacity',d=>!selectedId||selectedId===d.id ? 0.85 : 0.18)
+    .attr('stroke',d=>selectedId===d.id?'#222':'#fff')
+    .attr('stroke-width',d=>selectedId===d.id?2:0.5)
+    .style('cursor','pointer')
+    .on('mouseover',(ev,d)=>showTip(`Employer ${d.id}<br>${d.category}<br>Jobs: ${d.job_count}<br>Rate: $${d.avg_rate}/hr`,ev))
+    .on('mouseout',hideTip)
+    .on('click',(_,d)=>selectEmployer(d.id));
+}
+
+drawRanking();
+drawScatter();
+drawMap();
+</script>
+</body></html>"""
+
+	return page.replace("__DATA__", _json.dumps(data))
+
+
+@app.route("/api/resident-financial-page", methods=["GET"])
+def resident_financial_page():
+	"""Combined Resident Financial Health dashboard: 5 charts in one page."""
+	if not DB_PATH.exists():
+		return jsonify({"error": f"Database not found: {DB_PATH}"}), 404
+
+	conn = _get_db_connection()
+	try:
+		cat_df = pd.read_sql_query(
+			"""SELECT strftime('%Y-%m', timestamp) AS month, category,
+			          SUM(amount) AS total_amount
+			   FROM financialjournal
+			   GROUP BY month, category ORDER BY month, category""",
+			conn,
+		)
+		wc_df = pd.read_sql_query(
+			"""SELECT strftime('%Y-%m', timestamp) AS month,
+			          SUM(CASE WHEN category='Wage' THEN amount ELSE 0 END) AS wage,
+			          SUM(CASE WHEN category IN ('Food','Shelter','Recreation','Education')
+			                   THEN ABS(amount) ELSE 0 END) AS cost_of_living
+			   FROM financialjournal GROUP BY month ORDER BY month""",
+			conn,
+		)
+		ni_df = pd.read_sql_query(
+			"""SELECT participantId,
+			          SUM(CASE WHEN category='Wage' THEN amount ELSE 0 END) AS total_wage,
+			          SUM(CASE WHEN category IN ('Food','Shelter','Recreation','Education')
+			                   THEN ABS(amount) ELSE 0 END) AS total_expenses,
+			          SUM(amount) AS net_income
+			   FROM financialjournal GROUP BY participantId""",
+			conn,
+		)
+		p_df = pd.read_sql_query(
+			"SELECT participantId, educationLevel, age, joviality, householdSize, interestGroup FROM participants",
+			conn,
+		)
+	finally:
+		conn.close()
+
+	# ── Financial categories line ──────────────────────────────────────────
+	if not cat_df.empty:
+		months_cat = sorted(cat_df["month"].dropna().unique().tolist())
+		cats       = sorted(cat_df["category"].dropna().unique().tolist())
+		pivot      = (cat_df.pivot(index="month", columns="category", values="total_amount")
+		              .reindex(months_cat).fillna(0))
+		cat_data = {
+			"months": months_cat,
+			"series": [{"name": c, "values": [round(float(v), 2) for v in pivot[c].tolist()]}
+			           for c in cats if c in pivot.columns],
+		}
+	else:
+		cat_data = {"months": [], "series": []}
+
+	# ── Wages vs cost line ─────────────────────────────────────────────────
+	if not wc_df.empty:
+		wc_df["net_income"] = wc_df["wage"] - wc_df["cost_of_living"]
+		wc_data = {
+			"months": wc_df["month"].tolist(),
+			"series": [
+				{"name": "Wage",           "values": [round(v, 2) for v in wc_df["wage"].tolist()],           "color": "#2ca02c"},
+				{"name": "Cost of Living", "values": [round(v, 2) for v in wc_df["cost_of_living"].tolist()], "color": "#d62728"},
+				{"name": "Net Income",     "values": [round(v, 2) for v in wc_df["net_income"].tolist()],     "color": "#1f77b4"},
+			],
+		}
+	else:
+		wc_data = {"months": [], "series": []}
+
+	# ── Per-participant net income ─────────────────────────────────────────
+	ni_records = [
+		{"id": int(r["participantId"]),
+		 "net": round(float(r["net_income"]), 2),
+		 "wage": round(float(r["total_wage"]), 2),
+		 "exp": round(float(r["total_expenses"]), 2)}
+		for _, r in ni_df.iterrows()
+	] if not ni_df.empty else []
+
+	# ── Group comparison + parallel coords ────────────────────────────────
+	group_data = {"groups": [], "series": []}
+	pc_data    = {"records": [], "axes": [], "axis_labels": {}}
+
+	if not p_df.empty and not ni_df.empty:
+		p_df["participantId"]  = pd.to_numeric(p_df["participantId"],  errors="coerce")
+		ni_df["participantId"] = pd.to_numeric(ni_df["participantId"], errors="coerce")
+		merged = p_df.merge(ni_df, on="participantId", how="inner")
+
+		ORDER = {"Low": 0, "HighSchoolOrCollege": 1, "Bachelors": 2, "Graduate": 3}
+		grp = (merged.groupby("educationLevel")
+		       .agg(avg_wage=("total_wage","mean"), avg_exp=("total_expenses","mean"), avg_net=("net_income","mean"))
+		       .reset_index())
+		grp["_k"] = grp["educationLevel"].map(ORDER).fillna(99)
+		grp = grp.sort_values("_k")
+
+		group_data = {
+			"groups": grp["educationLevel"].tolist(),
+			"series": [
+				{"name": "Total Wage",     "values": [round(float(v),0) for v in grp["avg_wage"].tolist()], "color": "#2ca02c"},
+				{"name": "Total Expenses", "values": [round(float(v),0) for v in grp["avg_exp"].tolist()],  "color": "#d62728"},
+				{"name": "Net Income",     "values": [round(float(v),0) for v in grp["avg_net"].tolist()],  "color": "#1f77b4"},
+			],
+		}
+
+		axes = ["total_wage", "total_expenses", "net_income", "joviality", "age", "householdSize"]
+		pc_data = {
+			"records": [
+				{"edu": r["educationLevel"], "ig": r["interestGroup"],
+				 **{k: round(float(r[k]), 2) for k in axes if pd.notna(r[k])}}
+				for _, r in merged.iterrows()
+				if all(pd.notna(r[k]) for k in axes)
+			],
+			"axes": axes,
+			"axis_labels": {
+				"total_wage":     "Total Wage ($)",
+				"total_expenses": "Total Expenses ($)",
+				"net_income":     "Net Income ($)",
+				"joviality":      "Joviality",
+				"age":            "Age",
+				"householdSize":  "Household Size",
+			},
+		}
+
+	data = {
+		"categories": cat_data,
+		"wages_cost": wc_data,
+		"net_income": ni_records,
+		"groups":     group_data,
+		"parallel":   pc_data,
+	}
+	html = _render_resident_financial_html(data)
+	return html, 200, {"Content-Type": "text/html; charset=utf-8"}
+
+
+def _render_resident_financial_html(data: dict) -> str:
+	import json as _json
+
+	page = r"""<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8">
+<title>Resident Financial Health</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:Arial,sans-serif;background:#f4f5f7;color:#222;padding:16px}
+.info-box{background:#e7eef7;border-left:4px solid #2f5d8c;border-radius:6px;
+  padding:8px 14px;font-size:12px;color:#333;margin-bottom:14px;min-height:32px;line-height:1.6}
+.chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}
+.chart-panel{background:#fff;border-radius:10px;padding:14px;
+  box-shadow:0 1px 5px rgba(0,0,0,.1)}
+.chart-panel.full{background:#fff;border-radius:10px;padding:14px;
+  box-shadow:0 1px 5px rgba(0,0,0,.1);margin-bottom:14px}
+.chart-panel h3{font-size:14px;margin-bottom:3px}
+.chart-note{font-size:11px;color:#777;margin-bottom:10px}
+.legend{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:8px;font-size:11px}
+.leg-item{display:flex;align-items:center;gap:4px;cursor:pointer}
+.leg-dot{width:10px;height:10px;border-radius:50%}
+.tooltip{position:fixed;background:rgba(20,20,20,.92);color:#fff;padding:7px 11px;
+  border-radius:6px;font-size:12px;pointer-events:none;opacity:0;
+  transition:opacity .12s;line-height:1.6;z-index:999}
+@media(max-width:800px){.chart-grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<div class="info-box" id="info-box">
+  Click an education level in the <strong>Net Income by Group</strong> chart to highlight
+  matching participants in the <strong>Resident Financial Profiles</strong> below.
+</div>
+
+<div class="chart-grid">
+  <div class="chart-panel">
+    <h3>Financial Categories Over Time</h3>
+    <p class="chart-note">Monthly totals by category from FinancialJournal</p>
+    <div id="ch-cats"></div>
+  </div>
+  <div class="chart-panel">
+    <h3>Wages vs Cost of Living</h3>
+    <p class="chart-note">Monthly wage income, living costs, and net income</p>
+    <div id="ch-wc"></div>
+  </div>
+  <div class="chart-panel">
+    <h3>Net Income Distribution</h3>
+    <p class="chart-note">Histogram of per-participant net income over the study period</p>
+    <div id="ch-hist"></div>
+  </div>
+  <div class="chart-panel">
+    <h3>Net Income by Education Group</h3>
+    <p class="chart-note">Avg wage, expenses, net income per education level. Click a group to highlight in parallel coords.</p>
+    <div id="ch-groups"></div>
+  </div>
+</div>
+
+<div class="chart-panel full">
+  <h3>Resident Financial Profiles (Parallel Coordinates)</h3>
+  <p class="chart-note">Each line = one participant. Color = education level. Click a group above to highlight.</p>
+  <div class="legend" id="pc-legend"></div>
+  <div id="ch-pc"></div>
+</div>
+
+<div class="tooltip" id="tip"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+<script>
+const DATA = __DATA__;
+const tip  = d3.select('#tip');
+let selectedGroup = null;
+
+const EDU_COLOR = {
+  'Low':                 '#e41a1c',
+  'HighSchoolOrCollege': '#ff7f00',
+  'Bachelors':           '#4daf4a',
+  'Graduate':            '#377eb8',
+};
+const CAT_COLORS = d3.schemeTableau10;
+
+function showTip(html, ev){
+  tip.html(html).style('opacity',1)
+    .style('left',(ev.clientX+14)+'px').style('top',(ev.clientY-40)+'px');
+}
+function hideTip(){ tip.style('opacity',0); }
+
+// ── helpers ─────────────────────────────────────────────────────────────
+function drawLineChart(elId, months, series, tickStep){
+  const el = document.getElementById(elId);
+  const W = el.clientWidth||440, H = 260;
+  const m = {top:10,right:80,bottom:38,left:58};
+  const w = W-m.left-m.right, h = H-m.top-m.bottom;
+
+  const svg = d3.select(el).append('svg').attr('width',W).attr('height',H);
+  const g   = svg.append('g').attr('transform',`translate(${m.left},${m.top})`);
+
+  const x  = d3.scalePoint().domain(months).range([0,w]);
+  const allV = series.flatMap(s=>s.values);
+  const y  = d3.scaleLinear().domain([d3.min(allV),d3.max(allV)]).nice().range([h,0]);
+  const ln = d3.line().x((_,i)=>x(months[i])).y(d=>y(d)).curve(d3.curveMonotoneX);
+
+  g.append('g').attr('transform',`translate(0,${h})`)
+    .call(d3.axisBottom(x).tickValues(months.filter((_,i)=>i%(tickStep||4)===0)).tickSize(-h))
+    .call(ax=>{ax.selectAll('.tick line').attr('stroke','#eee'); ax.select('.domain').remove();})
+    .selectAll('text').attr('transform','rotate(-30)').attr('text-anchor','end').attr('font-size',9);
+  g.append('g').call(d3.axisLeft(y).ticks(5).tickFormat(d=>'$'+d3.format('.2s')(d)));
+
+  series.forEach((s,i)=>{
+    const col = s.color || CAT_COLORS[i % CAT_COLORS.length];
+    g.append('path').datum(s.values).attr('fill','none')
+      .attr('stroke',col).attr('stroke-width',1.8).attr('d',ln);
+    const lx = x(months[months.length-1]);
+    const ly = y(s.values[s.values.length-1]);
+    g.append('text').attr('x',lx+4).attr('y',ly).attr('fill',col)
+      .attr('font-size',9).attr('dominant-baseline','middle').text(s.name);
+  });
+}
+
+// ── Financial categories line ────────────────────────────────────────────
+(function(){
+  const {months, series} = DATA.categories;
+  if(months.length) drawLineChart('ch-cats', months, series, 4);
+})();
+
+// ── Wages vs cost line ───────────────────────────────────────────────────
+(function(){
+  const {months, series} = DATA.wages_cost;
+  if(months.length) drawLineChart('ch-wc', months, series, 4);
+})();
+
+// ── Net income histogram ─────────────────────────────────────────────────
+(function(){
+  const records = DATA.net_income;
+  if(!records.length) return;
+  const el = document.getElementById('ch-hist');
+  const W = el.clientWidth||440, H = 260;
+  const m = {top:14,right:16,bottom:38,left:52};
+  const w = W-m.left-m.right, h = H-m.top-m.bottom;
+
+  const vals = records.map(d=>d.net);
+  const x = d3.scaleLinear().domain(d3.extent(vals)).nice().range([0,w]);
+  const bins = d3.bin().domain(x.domain()).thresholds(30)(vals);
+  const y = d3.scaleLinear().domain([0,d3.max(bins,b=>b.length)]).nice().range([h,0]);
+  const med = d3.median(vals);
+
+  const svg = d3.select(el).append('svg').attr('width',W).attr('height',H);
+  const g   = svg.append('g').attr('transform',`translate(${m.left},${m.top})`);
+
+  g.selectAll('rect').data(bins).join('rect')
+    .attr('x',b=>x(b.x0)+1).attr('width',b=>Math.max(0,x(b.x1)-x(b.x0)-1))
+    .attr('y',b=>y(b.length)).attr('height',b=>h-y(b.length))
+    .attr('fill','#1f77b4').attr('opacity',0.75)
+    .on('mouseover',(ev,b)=>showTip(`Range: $${b.x0.toFixed(0)} – $${b.x1.toFixed(0)}<br>Count: ${b.length}`,ev))
+    .on('mouseout',hideTip);
+
+  g.append('line').attr('x1',x(med)).attr('x2',x(med)).attr('y1',0).attr('y2',h)
+    .attr('stroke','#d62728').attr('stroke-width',1.5).attr('stroke-dasharray','4,3');
+  g.append('text').attr('x',x(med)+4).attr('y',10).attr('fill','#d62728')
+    .attr('font-size',10).text('median');
+
+  g.append('g').attr('transform',`translate(0,${h})`)
+    .call(d3.axisBottom(x).ticks(6).tickFormat(d=>'$'+d3.format('.2s')(d)));
+  g.append('g').call(d3.axisLeft(y).ticks(5));
+  g.append('text').attr('x',w/2).attr('y',h+34).attr('text-anchor','middle')
+    .attr('font-size',11).text('Net Income ($)');
+})();
+
+// ── Group comparison bars (linked) ───────────────────────────────────────
+function drawGroups(){
+  const el = document.getElementById('ch-groups');
+  d3.select(el).selectAll('*').remove();
+  const {groups, series} = DATA.groups;
+  if(!groups.length) return;
+
+  const W = el.clientWidth||440, H = 260;
+  const m = {top:10,right:10,bottom:60,left:62};
+  const w = W-m.left-m.right, h = H-m.top-m.bottom;
+
+  const svg = d3.select(el).append('svg').attr('width',W).attr('height',H);
+  const g   = svg.append('g').attr('transform',`translate(${m.left},${m.top})`);
+
+  const x0  = d3.scaleBand().domain(groups).range([0,w]).padding(0.2);
+  const x1  = d3.scaleBand().domain(series.map(s=>s.name)).range([0,x0.bandwidth()]).padding(0.05);
+  const allV = series.flatMap(s=>s.values);
+  const y   = d3.scaleLinear().domain([0,d3.max(allV)]).nice().range([h,0]);
+
+  series.forEach(s=>{
+    g.selectAll(null).data(groups).join('rect')
+      .attr('x',grp=>x0(grp)+x1(s.name))
+      .attr('y',(_,i)=>y(s.values[i]))
+      .attr('width',x1.bandwidth())
+      .attr('height',(_,i)=>h-y(s.values[i]))
+      .attr('fill',s.color)
+      .attr('opacity',(_,i)=>!selectedGroup||selectedGroup===groups[i]?0.85:0.25)
+      .style('cursor','pointer')
+      .on('mouseover',(ev,grp,j)=>{
+        const i=groups.indexOf(grp);
+        showTip(`${grp}<br>${s.name}: $${s.values[i].toLocaleString()}`,ev);
+      })
+      .on('mouseout',hideTip)
+      .on('click',(_,grp)=>{
+        selectedGroup = (selectedGroup===grp)?null:grp;
+        updateGroupSelection();
+      });
+  });
+
+  g.append('g').attr('transform',`translate(0,${h})`)
+    .call(d3.axisBottom(x0))
+    .selectAll('text').attr('transform','rotate(-20)').attr('text-anchor','end').attr('font-size',10)
+    .style('cursor','pointer').on('click',(_,grp)=>{
+      selectedGroup=(selectedGroup===grp)?null:grp;
+      updateGroupSelection();
+    });
+  g.append('g').call(d3.axisLeft(y).ticks(5).tickFormat(d=>'$'+d3.format('.2s')(d)));
+
+  // legend
+  const legEl = document.createElement('div');
+  legEl.style.cssText='display:flex;gap:12px;font-size:11px;margin-bottom:6px;flex-wrap:wrap';
+  series.forEach(s=>{
+    const item = document.createElement('span');
+    item.style.cssText='display:flex;align-items:center;gap:4px';
+    item.innerHTML=`<span style="width:10px;height:10px;border-radius:50%;background:${s.color};display:inline-block"></span>${s.name}`;
+    legEl.appendChild(item);
+  });
+  el.insertBefore(legEl, el.firstChild);
+}
+
+function updateGroupSelection(){
+  const box = document.getElementById('info-box');
+  if(selectedGroup){
+    box.innerHTML=`Selected: <strong style="color:${EDU_COLOR[selectedGroup]||'#2f5d8c'}">${selectedGroup}</strong>
+      — showing matching participants in parallel coordinates.
+      <span style="cursor:pointer;color:#2f5d8c;margin-left:8px" onclick="selectedGroup=null;updateGroupSelection()">✕ clear</span>`;
+  } else {
+    box.innerHTML='Click an education level in the <strong>Net Income by Group</strong> chart to highlight matching participants in the <strong>Resident Financial Profiles</strong> below.';
+  }
+  drawGroups();
+  drawParallelCoords();
+}
+
+// ── Parallel coordinates (linked) ────────────────────────────────────────
+function drawParallelCoords(){
+  const el = document.getElementById('ch-pc');
+  d3.select(el).selectAll('*').remove();
+  const {records, axes, axis_labels} = DATA.parallel;
+  if(!records.length) return;
+
+  const W = el.clientWidth||860, H = 380;
+  const m = {top:30,right:20,bottom:10,left:20};
+  const w = W-m.left-m.right, h = H-m.top-m.bottom;
+
+  const svg = d3.select(el).append('svg').attr('width',W).attr('height',H);
+  const g   = svg.append('g').attr('transform',`translate(${m.left},${m.top})`);
+
+  const x = d3.scalePoint().domain(axes).range([0,w]);
+  const y = {};
+  axes.forEach(ax=>{
+    y[ax] = d3.scaleLinear().domain(d3.extent(records,d=>d[ax])).nice().range([h,0]);
+  });
+
+  function makePath(d){
+    return d3.line()(axes.map(ax=>[x(ax), y[ax](d[ax])]));
+  }
+
+  // Draw lines
+  g.selectAll('path.rec').data(records).join('path')
+    .attr('class','rec')
+    .attr('d',makePath)
+    .attr('fill','none')
+    .attr('stroke',d=>EDU_COLOR[d.edu]||'#999')
+    .attr('stroke-width',0.7)
+    .attr('opacity',d=>!selectedGroup||selectedGroup===d.edu?0.35:0.04)
+    .on('mouseover',(ev,d)=>showTip(
+      `Edu: ${d.edu}<br>Wage: $${d.total_wage?.toLocaleString()}<br>`+
+      `Expenses: $${d.total_expenses?.toLocaleString()}<br>Net: $${d.net_income?.toLocaleString()}<br>`+
+      `Age: ${d.age} | Joviality: ${d.joviality}`,ev))
+    .on('mouseout',hideTip);
+
+  // Axes
+  axes.forEach(ax=>{
+    const axG = g.append('g').attr('transform',`translate(${x(ax)},0)`);
+    axG.call(d3.axisLeft(y[ax]).ticks(5));
+    axG.append('text').attr('y',-14).attr('text-anchor','middle')
+      .attr('fill','#333').attr('font-size',11).attr('font-weight','bold')
+      .text(axis_labels[ax]||ax);
+  });
+}
+
+// ── Parallel coords legend ───────────────────────────────────────────────
+(function buildLegend(){
+  const legEl = document.getElementById('pc-legend');
+  Object.entries(EDU_COLOR).forEach(([edu, col])=>{
+    const item = document.createElement('span');
+    item.className='leg-item';
+    item.style.cssText='display:flex;align-items:center;gap:4px;cursor:pointer;font-size:11px';
+    item.innerHTML=`<span class="leg-dot" style="background:${col};width:10px;height:10px;border-radius:50%;display:inline-block"></span>${edu}`;
+    item.addEventListener('click',()=>{
+      selectedGroup=(selectedGroup===edu)?null:edu;
+      updateGroupSelection();
+    });
+    legEl.appendChild(item);
+  });
+})();
+
+// initial draw
+drawGroups();
+drawParallelCoords();
+</script>
+</body></html>"""
+
+	return page.replace("__DATA__", _json.dumps(data))
+
+
+@app.route("/api/employment-page", methods=["GET"])
+def employment_page():
+	"""Combined Employment & Turnover dashboard: 4 charts in one page."""
+	if not DB_PATH.exists():
+		return jsonify({"error": f"Database not found: {DB_PATH}"}), 404
+
+	conn = _get_db_connection()
+	try:
+		# ── 1. Turnover ranking ────────────────────────────────────────────
+		start_df, end_df = _get_job_transitions(conn)
+
+		# ── 2. Small multiples ─────────────────────────────────────────────
+		sm_df = pd.read_sql_query(
+			"""SELECT strftime('%Y-%m', timestamp) AS month,
+			          venueId AS employerId,
+			          COUNT(DISTINCT participantId) AS workers
+			   FROM checkinjournal WHERE venueType='Workplace'
+			   GROUP BY month, venueId ORDER BY month, venueId""",
+			conn,
+		)
+
+		# ── 3. Workforce participation ─────────────────────────────────────
+		wf_df = pd.read_sql_query(
+			"""SELECT strftime('%Y-%m', timestamp) AS month,
+			          COUNT(DISTINCT participantId) AS active_workers,
+			          SUM(amount)/COUNT(DISTINCT participantId) AS avg_wage
+			   FROM financialjournal WHERE category='Wage'
+			   GROUP BY month ORDER BY month""",
+			conn,
+		)
+
+		# ── 4. Job transitions sankey ──────────────────────────────────────
+		tbl_rows = conn.execute(
+			"SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'participantstatuslogs%'"
+		).fetchall()
+		tables = sorted([r[0] for r in tbl_rows],
+		                key=lambda t: int(re.search(r"(\d+)$", t).group(1)))
+
+		sankey_nodes, sankey_links = [], []
+		if len(tables) >= 2:
+			jobs_edu = pd.read_sql_query(
+				"SELECT jobId, educationRequirement FROM jobs WHERE educationRequirement IS NOT NULL",
+				conn,
+			)
+
+			def dominant_sector(tbl: str) -> pd.DataFrame:
+				df = pd.read_sql_query(
+					f"""SELECT participantId, jobId, COUNT(*) AS cnt
+					    FROM "{tbl}"
+					    WHERE jobId IS NOT NULL
+					      AND TRIM(CAST(jobId AS TEXT)) NOT IN ('','N/A','nan')
+					    GROUP BY participantId, jobId""",
+					conn,
+				)
+				if df.empty:
+					return pd.DataFrame(columns=["participantId","educationRequirement"])
+				top = (df.sort_values("cnt", ascending=False)
+				         .groupby("participantId").first().reset_index()
+				         [["participantId","jobId"]])
+				top["jobId"] = pd.to_numeric(top["jobId"], errors="coerce")
+				return top.merge(jobs_edu, on="jobId", how="left")[
+					["participantId","educationRequirement"]].dropna()
+
+			start_s = dominant_sector(tables[0])
+			end_s   = dominant_sector(tables[-1])
+
+			if not start_s.empty and not end_s.empty:
+				merged_s = start_s.merge(end_s, on="participantId",
+				                         suffixes=("_start","_end"))
+				flows = (merged_s
+				         .groupby(["educationRequirement_start","educationRequirement_end"])
+				         .size().reset_index(name="count"))
+				edu_order = ["Low","HighSchoolOrCollege","Bachelors","Graduate"]
+				left_lbls  = [f"{e} (Start)" for e in edu_order
+				              if e in flows["educationRequirement_start"].values]
+				right_lbls = [f"{e} (End)"   for e in edu_order
+				              if e in flows["educationRequirement_end"].values]
+				all_lbls   = left_lbls + [l for l in right_lbls if l not in left_lbls]
+				node_idx   = {lbl: i for i, lbl in enumerate(all_lbls)}
+				sankey_nodes = [{"id": i, "name": lbl} for lbl, i in node_idx.items()]
+				sankey_links = [
+					{"source": node_idx[f"{r['educationRequirement_start']} (Start)"],
+					 "target": node_idx[f"{r['educationRequirement_end']} (End)"],
+					 "value":  int(r["count"])}
+					for _, r in flows.iterrows()
+					if f"{r['educationRequirement_start']} (Start)" in node_idx
+					and f"{r['educationRequirement_end']} (End)" in node_idx
+				]
+	finally:
+		conn.close()
+
+	# ── Build turnover records ─────────────────────────────────────────────
+	turnover = []
+	if not start_df.empty and not end_df.empty:
+		all_emp = set(start_df["employerId"].dropna().astype(int)) | \
+		          set(end_df["employerId"].dropna().astype(int))
+		for emp in all_emp:
+			sp = set(start_df[start_df["employerId"]==emp]["participantId"])
+			ep = set(end_df[end_df["employerId"]==emp]["participantId"])
+			dep = len(sp - ep); arr = len(ep - sp); stb = len(sp & ep)
+			turnover.append({
+				"id": int(emp), "departed": dep, "arrived": arr,
+				"stable": stb, "total": max(len(sp),1),
+				"count": dep+arr,
+				"rate":  round((dep+arr)/max(len(sp),1), 3),
+			})
+		turnover = sorted(turnover, key=lambda x: x["count"], reverse=True)[:60]
+
+	# ── Build small multiples ──────────────────────────────────────────────
+	sm_data = {"months": [], "panels": []}
+	if not sm_df.empty:
+		months_sm = sorted(sm_df["month"].unique().tolist())
+		top_n = 16
+		totals = sm_df.groupby("employerId")["workers"].sum().nlargest(top_n)
+		panels = []
+		for eid in totals.index:
+			sub = sm_df[sm_df["employerId"]==eid].set_index("month")["workers"]
+			panels.append({
+				"id": int(eid),
+				"total": int(totals[eid]),
+				"values": [int(sub.get(m, 0)) for m in months_sm],
+			})
+		sm_data = {"months": months_sm, "panels": panels}
+
+	# ── Build workforce data ───────────────────────────────────────────────
+	wf_data = {"months": [], "series": []}
+	if not wf_df.empty:
+		wf_data = {
+			"months": wf_df["month"].tolist(),
+			"series": [
+				{"name": "Active Wage Earners",   "values": [int(v)          for v in wf_df["active_workers"].tolist()], "color": "#2ca02c"},
+				{"name": "Avg Wage / Worker ($)",  "values": [round(float(v),2) for v in wf_df["avg_wage"].tolist()],       "color": "#ff7f0e"},
+			],
+		}
+
+	data = {
+		"turnover":       turnover,
+		"small_multiples": sm_data,
+		"workforce":      wf_data,
+		"sankey":         {"nodes": sankey_nodes, "links": sankey_links},
+	}
+	html = _render_employment_html(data)
+	return html, 200, {"Content-Type": "text/html; charset=utf-8"}
+
+
+def _render_employment_html(data: dict) -> str:
+	import json as _json
+
+	page = r"""<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8">
+<title>Employment & Turnover</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:Arial,sans-serif;background:#f4f5f7;color:#222;padding:16px}
+.info-bar{background:#e7eef7;border-left:4px solid #2f5d8c;border-radius:6px;
+  padding:8px 14px;font-size:12px;color:#333;margin-bottom:14px;min-height:32px;line-height:1.6}
+.chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}
+.chart-panel{background:#fff;border-radius:10px;padding:14px;box-shadow:0 1px 5px rgba(0,0,0,.1)}
+.chart-panel h3{font-size:14px;margin-bottom:3px}
+.chart-note{font-size:11px;color:#777;margin-bottom:10px}
+.sm-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.sm-panel{background:#fff;border-radius:8px;padding:8px;border:1px solid #eee;
+  cursor:pointer;transition:border .15s,opacity .15s}
+.sm-panel:hover{border-color:#2f5d8c}
+.sm-title{font-size:10px;font-weight:bold;color:#333;margin-bottom:3px}
+.sm-sub{font-size:9px;color:#777}
+.tooltip{position:fixed;background:rgba(20,20,20,.92);color:#fff;padding:7px 11px;
+  border-radius:6px;font-size:12px;pointer-events:none;opacity:0;
+  transition:opacity .12s;line-height:1.6;z-index:999}
+@media(max-width:800px){.chart-grid{grid-template-columns:1fr}.sm-grid{grid-template-columns:repeat(2,1fr)}}
+</style>
+</head>
+<body>
+
+<div class="info-bar" id="info-bar">
+  Click an employer bar in <strong>Turnover Ranking</strong> to highlight it in the small multiples grid.
+</div>
+
+<div class="chart-grid">
+  <div class="chart-panel" style="overflow-y:auto;max-height:480px">
+    <h3>Turnover Ranking by Employer</h3>
+    <p class="chart-note">Top 60 employers by turnover count. Click to highlight in small multiples.</p>
+    <div id="ch-ranking"></div>
+  </div>
+  <div class="chart-panel">
+    <h3>Monthly Worker Count — Small Multiples</h3>
+    <p class="chart-note">Top 16 employers by workplace check-ins. Selected employer highlighted in blue.</p>
+    <div class="sm-grid" id="ch-small"></div>
+  </div>
+  <div class="chart-panel">
+    <h3>Workforce Participation Over Time</h3>
+    <p class="chart-note">Active wage earners (green, left axis) and avg wage per worker (orange, right axis)</p>
+    <div id="ch-workforce"></div>
+  </div>
+  <div class="chart-panel">
+    <h3>Job Transitions Between Sectors</h3>
+    <p class="chart-note">Participant movement by job sector (education requirement) — first vs last period</p>
+    <div id="ch-sankey"></div>
+  </div>
+</div>
+
+<div class="tooltip" id="tip"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/d3-sankey@0.12/dist/d3-sankey.min.js"></script>
+<script>
+const DATA = __DATA__;
+const tip  = d3.select('#tip');
+let selectedEmp = null;
+
+function showTip(html,ev){ tip.html(html).style('opacity',1).style('left',(ev.clientX+14)+'px').style('top',(ev.clientY-40)+'px'); }
+function hideTip(){ tip.style('opacity',0); }
+
+function selectEmployer(id){
+  selectedEmp = (selectedEmp===id)?null:id;
+  const bar = document.getElementById('info-bar');
+  if(selectedEmp){
+    bar.innerHTML=`Selected: <strong>Employer ${selectedEmp}</strong>
+      <span style="cursor:pointer;color:#2f5d8c;margin-left:8px" onclick="selectEmployer(${selectedEmp})">✕ clear</span>`;
+  } else {
+    bar.innerHTML='Click an employer bar in <strong>Turnover Ranking</strong> to highlight it in the small multiples grid.';
+  }
+  drawRanking();
+  highlightSmall();
+}
+
+// ── Turnover ranking ─────────────────────────────────────────────────────
+function drawRanking(){
+  const el = document.getElementById('ch-ranking');
+  d3.select(el).selectAll('*').remove();
+  const records = DATA.turnover;
+  if(!records.length) return;
+
+  const W = el.clientWidth||420, barH = 18;
+  const m = {top:4,right:80,bottom:20,left:52};
+  const H = records.length*barH+m.top+m.bottom;
+  const w = W-m.left-m.right;
+
+  const svg = d3.select(el).append('svg').attr('width',W).attr('height',H);
+  const g   = svg.append('g').attr('transform',`translate(${m.left},${m.top})`);
+
+  const maxC = d3.max(records,d=>d.count);
+  const x = d3.scaleLinear().domain([0,maxC]).range([0,w]);
+  const y = d3.scaleBand().domain(records.map(d=>d.id)).range([0,records.length*barH]).padding(0.1);
+
+  // Stacked: departed (red) + arrived (blue)
+  records.forEach(d=>{
+    const yo = y(d.id), bh = y.bandwidth();
+    const xDep = x(d.departed), xArr = x(d.arrived);
+    const isSelected = selectedEmp===d.id;
+    const opacity = !selectedEmp||isSelected ? 0.85 : 0.25;
+
+    g.append('rect').attr('x',0).attr('y',yo).attr('width',xDep).attr('height',bh)
+      .attr('fill','#d62728').attr('opacity',opacity);
+    g.append('rect').attr('x',xDep).attr('y',yo).attr('width',xArr).attr('height',bh)
+      .attr('fill','#1f77b4').attr('opacity',opacity);
+
+    if(isSelected){
+      g.append('rect').attr('x',-1).attr('y',yo-1).attr('width',w+2).attr('height',bh+2)
+        .attr('fill','none').attr('stroke','#2f5d8c').attr('stroke-width',2);
+    }
+
+    // invisible click target
+    g.append('rect').attr('x',0).attr('y',yo).attr('width',w).attr('height',bh)
+      .attr('fill','transparent').style('cursor','pointer')
+      .on('mouseover',ev=>showTip(
+        `Employer ${d.id}<br>Departed: ${d.departed} | Arrived: ${d.arrived}<br>`+
+        `Stable: ${d.stable} | Rate: ${(d.rate*100).toFixed(1)}%`,ev))
+      .on('mouseout',hideTip)
+      .on('click',()=>selectEmployer(d.id));
+  });
+
+  g.append('g').call(d3.axisLeft(y).tickFormat(d=>`Emp ${d}`).tickSize(0))
+    .call(ax=>{ax.select('.domain').remove();ax.selectAll('text').attr('font-size',9);});
+  g.append('g').attr('transform',`translate(0,${records.length*barH})`)
+    .call(d3.axisBottom(x).ticks(4));
+
+  // legend
+  const leg = g.append('g').attr('transform',`translate(${w+4},4)`);
+  [['#d62728','Departed'],['#1f77b4','Arrived']].forEach(([c,n],i)=>{
+    leg.append('rect').attr('x',0).attr('y',i*14).attr('width',10).attr('height',10).attr('fill',c);
+    leg.append('text').attr('x',13).attr('y',i*14+9).attr('font-size',9).text(n);
+  });
+}
+
+// ── Small multiples ──────────────────────────────────────────────────────
+function drawSmallMultiples(){
+  const container = document.getElementById('ch-small');
+  container.innerHTML='';
+  const {months, panels} = DATA.small_multiples;
+  if(!panels.length) return;
+
+  panels.forEach(panel=>{
+    const div = document.createElement('div');
+    div.className='sm-panel';
+    div.dataset.empid = panel.id;
+    div.addEventListener('click',()=>selectEmployer(panel.id));
+
+    const titleDiv = document.createElement('div');
+    titleDiv.className='sm-title';
+    titleDiv.textContent=`Employer ${panel.id}`;
+    div.appendChild(titleDiv);
+
+    const subDiv = document.createElement('div');
+    subDiv.className='sm-sub';
+    subDiv.textContent=`Total: ${panel.total.toLocaleString()} check-ins`;
+    div.appendChild(subDiv);
+
+    const W=160, H=60, m={top:2,right:4,bottom:14,left:18};
+    const w=W-m.left-m.right, h=H-m.top-m.bottom;
+    const svg = d3.create('svg').attr('width',W).attr('height',H);
+    const g   = svg.append('g').attr('transform',`translate(${m.left},${m.top})`);
+
+    const x = d3.scalePoint().domain(months).range([0,w]);
+    const y = d3.scaleLinear().domain([0,d3.max(panel.values)||1]).nice().range([h,0]);
+    const ln= d3.line().x((_,i)=>x(months[i])).y(d=>y(d)).curve(d3.curveMonotoneX);
+
+    g.append('g').attr('transform',`translate(0,${h})`)
+      .call(d3.axisBottom(x).tickValues(months.filter((_,i)=>i%6===0))
+        .tickSize(2).tickFormat(d=>d.slice(5)))
+      .call(ax=>{ax.select('.domain').remove();ax.selectAll('text').attr('font-size',7);});
+    g.append('g').call(d3.axisLeft(y).ticks(2))
+      .call(ax=>{ax.select('.domain').remove();ax.selectAll('text').attr('font-size',7);});
+
+    g.append('path').datum(panel.values).attr('fill','none')
+      .attr('stroke','#1f77b4').attr('stroke-width',1.2).attr('d',ln);
+
+    div.appendChild(svg.node());
+    container.appendChild(div);
+  });
+}
+
+function highlightSmall(){
+  document.querySelectorAll('.sm-panel').forEach(el=>{
+    const id = parseInt(el.dataset.empid);
+    el.style.border   = selectedEmp===id ? '2px solid #2f5d8c' : '1px solid #eee';
+    el.style.opacity  = !selectedEmp||selectedEmp===id ? '1' : '0.35';
+    el.querySelector('.sm-title').style.color = selectedEmp===id?'#2f5d8c':'#333';
+    const pathEl = el.querySelector('path');
+    if(pathEl) pathEl.setAttribute('stroke', selectedEmp===id?'#2f5d8c':'#1f77b4');
+  });
+}
+
+// ── Workforce participation (dual axis) ──────────────────────────────────
+(function drawWorkforce(){
+  const {months, series} = DATA.workforce;
+  if(!months.length) return;
+  const el = document.getElementById('ch-workforce');
+  const W = el.clientWidth||420, H = 260;
+  const m = {top:10,right:56,bottom:38,left:52};
+  const w = W-m.left-m.right, h = H-m.top-m.bottom;
+
+  const svg = d3.select(el).append('svg').attr('width',W).attr('height',H);
+  const g   = svg.append('g').attr('transform',`translate(${m.left},${m.top})`);
+
+  const x   = d3.scalePoint().domain(months).range([0,w]);
+  const yL  = d3.scaleLinear().domain(d3.extent(series[0].values)).nice().range([h,0]);
+  const yR  = d3.scaleLinear().domain(d3.extent(series[1].values)).nice().range([h,0]);
+  const ln  = (ysc) => d3.line().x((_,i)=>x(months[i])).y(d=>ysc(d)).curve(d3.curveMonotoneX);
+
+  g.append('g').attr('transform',`translate(0,${h})`)
+    .call(d3.axisBottom(x).tickValues(months.filter((_,i)=>i%4===0)).tickSize(-h))
+    .call(ax=>{ax.selectAll('.tick line').attr('stroke','#eee');ax.select('.domain').remove();})
+    .selectAll('text').attr('transform','rotate(-30)').attr('text-anchor','end').attr('font-size',9);
+
+  g.append('g').call(d3.axisLeft(yL).ticks(5)).selectAll('text').attr('fill',series[0].color);
+  g.append('g').attr('transform',`translate(${w},0)`)
+    .call(d3.axisRight(yR).ticks(5).tickFormat(d=>'$'+d3.format('.0f')(d)))
+    .selectAll('text').attr('fill',series[1].color);
+
+  series.forEach((s,i)=>{
+    const ysc = i===0?yL:yR;
+    g.append('path').datum(s.values).attr('fill','none')
+      .attr('stroke',s.color).attr('stroke-width',2).attr('d',ln(ysc));
+    g.append('text').attr('x',x(months[months.length-1])+4)
+      .attr('y',ysc(s.values[s.values.length-1]))
+      .attr('fill',s.color).attr('font-size',9).attr('dominant-baseline','middle')
+      .text(i===0?'Workers':'Wage');
+  });
+})();
+
+// ── Sankey ───────────────────────────────────────────────────────────────
+(function drawSankey(){
+  const {nodes, links} = DATA.sankey;
+  if(!nodes.length||!links.length) return;
+  const el = document.getElementById('ch-sankey');
+  const W = el.clientWidth||420, H = 320;
+  const m = {top:10,right:10,bottom:10,left:10};
+  const w = W-m.left-m.right, h = H-m.top-m.bottom;
+
+  const layout = d3.sankey()
+    .nodeId(d=>d.id).nodeWidth(14).nodePadding(14)
+    .extent([[0,0],[w,h]]);
+
+  const {nodes:sn, links:sl} = layout({
+    nodes: nodes.map(d=>({...d})),
+    links: links.map(d=>({...d})),
+  });
+
+  const color = d3.scaleOrdinal()
+    .domain(['Low','HighSchoolOrCollege','Bachelors','Graduate'])
+    .range(['#e41a1c','#ff7f00','#4daf4a','#377eb8']);
+  const nodeColor = d=>color(d.name.replace(/ \(.*\)/,''));
+
+  const svg = d3.select(el).append('svg').attr('width',W).attr('height',H);
+  const g   = svg.append('g').attr('transform',`translate(${m.left},${m.top})`);
+
+  g.selectAll('path').data(sl).join('path')
+    .attr('d',d3.sankeyLinkHorizontal())
+    .attr('fill','none')
+    .attr('stroke',d=>nodeColor(d.source))
+    .attr('stroke-width',d=>Math.max(1,d.width))
+    .attr('opacity',0.38)
+    .on('mouseover',(ev,d)=>showTip(`${d.source.name} → ${d.target.name}<br>Count: ${d.value}`,ev))
+    .on('mouseout',hideTip);
+
+  g.selectAll('rect').data(sn).join('rect')
+    .attr('x',d=>d.x0).attr('y',d=>d.y0)
+    .attr('width',d=>d.x1-d.x0).attr('height',d=>Math.max(1,d.y1-d.y0))
+    .attr('fill',nodeColor).attr('opacity',0.9)
+    .on('mouseover',(ev,d)=>showTip(`${d.name}<br>Flow: ${d.value}`,ev))
+    .on('mouseout',hideTip);
+
+  g.selectAll('text').data(sn).join('text')
+    .attr('x',d=>d.x0<w/2?d.x1+5:d.x0-5)
+    .attr('y',d=>(d.y0+d.y1)/2)
+    .attr('dy','0.35em')
+    .attr('text-anchor',d=>d.x0<w/2?'start':'end')
+    .attr('font-size',10)
+    .text(d=>`${d.name.replace(/ \(.*\)/,'')} (${d.value})`);
+})();
+
+// initial draw
+drawRanking();
+drawSmallMultiples();
+</script>
+</body></html>"""
+
+	return page.replace("__DATA__", _json.dumps(data))
 
 
 if __name__ == "__main__":
