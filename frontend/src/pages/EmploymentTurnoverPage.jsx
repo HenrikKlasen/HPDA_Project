@@ -4,18 +4,18 @@ function EmploymentTurnoverPage() {
     const [iframeContent, setIframeContent] = useState(null);
   
     useEffect(() => {
-      const cachedContent = localStorage.getItem('residentFinancialContent');
+      const cachedContent = localStorage.getItem('employmentContent');
       if (cachedContent) {
         setIframeContent(cachedContent);
       } else {
-        fetch('http://localhost:5000/api/resident-financial-page')
+        fetch('http://localhost:5000/api/employment-page')
           .then(res => res.text())
           .then(html => {
-            localStorage.setItem('residentFinancialContent', html);
+            localStorage.setItem('employmentContent', html);
             setIframeContent(html);
           })
           .catch(error => {
-            console.error('Failed to fetch resident financial content:', error);
+            console.error('Failed to fetch employment turnover content:', error);
           });
       }
     }, []);

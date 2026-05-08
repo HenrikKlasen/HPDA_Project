@@ -8,7 +8,7 @@ const CATEGORY_COLORS = {
   School: '#f59e0b',
 };
 
-function BuildingsMap() {
+function BuildingsMap({ onEmployerSelect }) {
   const svgRef = useRef(null);
   const groupRef = useRef(null);
   const zoomBehaviorRef = useRef(null);
@@ -31,6 +31,25 @@ function BuildingsMap() {
     Pub: true,
     School: true,
   });
+  const [employers, setEmployers] = useState(() => {
+    const cached = localStorage.getItem('employers');
+    return cached ? JSON.parse(cached) : [];
+  });
+
+  useEffect(() => {
+    async function loadEmployers() {
+      try {
+        const response = await fetch('http://localhost:5000/api/export/employer-health-csv');
+        const data = await response.json();
+        setEmployers(data);
+        localStorage.setItem('employers', JSON.stringify(data));
+      } catch (err) {
+        console.error('Failed to load employers:', err);
+      }
+    }
+
+    loadEmployers();
+  }, []);
 
   useEffect(() => {
     let ignore = false;
@@ -316,7 +335,7 @@ function resetZoom() {
           >
             <g ref={groupRef}>
               <rect width={displayWidth} height={displayHeight} fill="transparent" style={{ pointerEvents: 'all' }} />
-              <image href="/assets/basemap.png" x="0" y="0" width={displayWidth} height={displayHeight} style={{ pointerEvents: 'all' }} />
+              {/* <image href="/assets/basemap.png" x="0" y="0" width={displayWidth} height={displayHeight} style={{ pointerEvents: 'all' }} /> */}
               
               {/* Interactive layer - buildings and points */}
               {filteredBuildings.map((building) => {
@@ -366,6 +385,11 @@ function resetZoom() {
                     });
                   }}
                   onMouseLeave={() => setActivePoint(null)}
+                  onClick={() => {
+                    if (point.category === 'Employer' && onEmployerSelect) {
+                      onEmployerSelect(point);
+                    }
+                  }}
                 />
               ))}
             </g>

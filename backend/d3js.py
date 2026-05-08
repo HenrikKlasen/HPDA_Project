@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 from d3blocks import D3Blocks
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_file
 from flask_cors import CORS
 
 app = Flask(__name__)
@@ -2428,7 +2428,7 @@ def overall_view_page():
 		import json as _jj
 		raw = _jj.loads(buildings_path.read_text(encoding="utf-8"))
 		buildings = [
-			{"coords": b["coords"], "type": b.get("buildingType", "")}
+			{"coords": b["coords"], "type": b.get("type", "")}
 			for b in raw if b.get("coords")
 		]
 
@@ -3587,7 +3587,97 @@ drawSmallMultiples();
 </body></html>"""
 
 	return page.replace("__DATA__", _json.dumps(data))
+@app.route("/api/export/employer-health-csv", methods=["GET"])
+def export_employer_health_csv_endpoint():
+	"""Export employer health metrics as CSV and return as downloadable file."""
+	try:
+		output_path = export_employer_health_json()
+		return send_file(
+			output_path,
+			mimetype="application/json",
+			as_attachment=True,
+			download_name="employer_health_summary.json"
+		)
+	except FileNotFoundError as exc:
+		return jsonify({"error": str(exc)}), 404
+	except ValueError as exc:
+		return jsonify({"error": str(exc)}), 400
+	except Exception as exc:
+		return jsonify({"error": f"Failed to export: {exc}"}), 500
+
+
+def export_employer_health_json(output_path: str | Path | None = None) -> Path:
+	"""Export employer health metrics to a single JSON file."""
+	if output_path is None:
+		output_path = Path(__file__).resolve().parent / "employer_health_summary.json"
+	else:
+		output_path = Path(output_path)
+
+	if not DB_PATH.exists():
+		raise FileNotFoundError(f"Database file not found: {DB_PATH}")
+
+	conn = _get_db_connection()
+	try:
+		health_df = _compute_employer_health_scores(conn)
+		if health_df.empty:
+			raise ValueError("No employer health data available.")
+
+		sector_df = pd.read_sql_query(
+			"""
+			SELECT employerId, educationRequirement AS sector, COUNT(*) AS cnt
+			FROM jobs
+			WHERE educationRequirement IS NOT NULL
+			GROUP BY employerId, educationRequirement
+			ORDER BY employerId, cnt DESC
+			""",
+			conn,
+		)
+		if not sector_df.empty:
+			sector_df = sector_df.sort_values(["employerId", "cnt"], ascending=[True, False])
+			sector_df = sector_df.groupby("employerId", as_index=False).first()[["employerId", "sector"]]
+		else:
+			sector_df = pd.DataFrame(columns=["employerId", "sector"])
+
+		health_df["employerId"] = pd.to_numeric(health_df["employerId"], errors="coerce")
+		health_df["job_count"] = pd.to_numeric(health_df["job_count"], errors="coerce").fillna(0).astype(int)
+		health_df["avg_rate"] = pd.to_numeric(health_df["avg_rate"], errors="coerce").round(2)
+		health_df["turnover_count"] = (
+			pd.to_numeric(health_df["departed"], errors="coerce").fillna(0)
+			+ pd.to_numeric(health_df["arrived"], errors="coerce").fillna(0)
+		).astype(int)
+
+		export_df = health_df.merge(sector_df, on="employerId", how="left")
+		export_df["sector"] = export_df["sector"].fillna("Unknown")
+		export_df["health_category"] = export_df["health_score"].apply(
+			lambda s: "Prosperous" if s >= 0.6 else "Neutral" if s >= 0.35 else "Struggling"
+		)
+
+		result = export_df[[
+			"employerId",
+			"sector",
+			"job_count",
+			"avg_rate",
+			"turnover_count",
+			"turnover_rate",
+			"health_category",
+		]].rename(columns={
+			"employerId": "employerId",
+			"sector": "Sector",
+			"job_count": "JobCount",
+			"avg_rate": "AverageHourlyRate",
+			"turnover_count": "TurnoverCount",
+			"turnover_rate": "TurnoverRate",
+			"health_category": "HealthCategory",
+		})
+
+		output_path.parent.mkdir(parents=True, exist_ok=True)
+		result.to_json(output_path, orient="records", indent=2)
+		return output_path
+	finally:
+		conn.close()
 
 
 if __name__ == "__main__":
 	app.run(debug=True, threaded=True, host="0.0.0.0", port=5000)
+
+

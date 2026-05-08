@@ -1,6 +1,60 @@
 import BuildingsMap from '../components/maps/BuildingsMap';
+import React, { useEffect, useState } from 'react';
 
 function MapExplorerPage() {
+  const [selectedEmployer, setSelectedEmployer] = useState(null);
+  const [employers, setEmployers] = useState([]);
+
+  useEffect(() => {
+    const data = localStorage.getItem('employers');
+    if (data) {
+      try {
+        const parsed = JSON.parse(data);
+        if (Array.isArray(parsed)) {
+          setEmployers(parsed);
+        } else {
+          setSelectedEmployer(parsed);
+        }
+      } catch (e) {
+        console.error('Failed to parse employers data:', e);
+      }
+    }
+  }, []);
+
+  const handleEmployerSelect = (pointData) => {
+    console.log('Point selected:', pointData);
+    console.log('Employers data:', employers);
+    
+    if (pointData && pointData.name && employers.length > 0) {
+      // Try multiple matching strategies
+      let matchedEmployer = employers.find(
+        (emp) => emp.location && emp.id.toLowerCase().equals(pointData.id.toLowerCase())
+      );
+      
+      if (!matchedEmployer) {
+        matchedEmployer = employers.find(
+          (emp) => emp.employerId === pointData.id
+        );
+      }
+      
+      if (!matchedEmployer) {
+        matchedEmployer = employers.find(
+          (emp) => emp.employerId  == pointData.id
+        );
+      }
+      
+      console.log('Matched employer:', matchedEmployer);
+      
+      if (matchedEmployer) {
+        setSelectedEmployer(matchedEmployer);
+      } else {
+        console.warn('No employer matched for point:', pointData.id);
+      }
+    } else {
+      console.warn('Point data invalid or no employers loaded');
+    }
+  };
+
   return (
     <section>
       <div className="section-intro">
@@ -16,44 +70,26 @@ function MapExplorerPage() {
           <p className="chart-note">
             Large version of the map with controls for color mode and selected employer.
           </p>
-          <BuildingsMap />
+          <BuildingsMap onEmployerSelect={handleEmployerSelect} />
         </div>
 
         <aside className="details-panel">
           <h3>Selected Employer Details</h3>
 
-          <div className="details-row">
-            <span>Employer ID</span>
-            <strong>—</strong>
-          </div>
-          <div className="details-row">
-            <span>Sector</span>
-            <strong>—</strong>
-          </div>
-          <div className="details-row">
-            <span>Job Count</span>
-            <strong>—</strong>
-          </div>
-          <div className="details-row">
-            <span>Average Hourly Rate</span>
-            <strong>—</strong>
-          </div>
-          <div className="details-row">
-            <span>Turnover Count</span>
-            <strong>—</strong>
-          </div>
-          <div className="details-row">
-            <span>Turnover Rate</span>
-            <strong>—</strong>
-          </div>
-          <div className="details-row">
-            <span>Health Category</span>
-            <strong>—</strong>
-          </div>
-
-          <div className="chart-placeholder" style={{ marginTop: '18px', minHeight: '160px' }}>
-            Click an employer on the map to see details here.
-          </div>
+          {selectedEmployer ? (
+            <>
+              {Object.entries(selectedEmployer).map(([key, value]) => (
+                <div className="details-row" key={key}>
+                  <span>{key}</span>
+                  <strong>{value || '—'}</strong>
+                </div>
+              ))}
+            </>
+          ) : (
+            <div className="chart-placeholder" style={{ marginTop: '18px', minHeight: '160px' }}>
+              Click an employer on the map to see details here.
+            </div>
+          )}
         </aside>
       </div>
     </section>
