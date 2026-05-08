@@ -1,24 +1,11 @@
-import React, { useMemo, useState, useEffect } from 'react';
-function ResidentFinancialHealthPage() {
+import { useBackendPage } from '../hooks/useBackendPage';
 
-      const [iframeContent, setIframeContent] = useState(null);
-    
-      useEffect(() => {
-        const cachedContent = localStorage.getItem('residentFinancialContent');
-        if (cachedContent) {
-          setIframeContent(cachedContent);
-        } else {
-          fetch('http://localhost:5000/api/resident-financial-page')
-            .then(res => res.text())
-            .then(html => {
-              localStorage.setItem('residentFinancialContent', html);
-              setIframeContent(html);
-            })
-            .catch(error => {
-              console.error('Failed to fetch resident financial content:', error);
-            });
-        }
-      }, []);
+function ResidentFinancialHealthPage() {
+  const { html, loading, error, refresh } = useBackendPage(
+    'residentFinancialContent',
+    '/api/resident-financial-page'
+  );
+
   return (
     <section>
       <div className="section-intro">
@@ -28,13 +15,58 @@ function ResidentFinancialHealthPage() {
           FinancialJournal is interpreted as participant income and spending.
         </p>
       </div>
-
-
-      {iframeContent && (
-        <iframe srcDoc={iframeContent} style={{ width: '100%', height: '2000px', border: 'none' }} />
-      )}
+      <PageFrame html={html} loading={loading} error={error} onRefresh={refresh} />
     </section>
   );
 }
+
+function PageFrame({ html, loading, error, onRefresh }) {
+  if (loading) return <LoadingState />;
+  if (error)   return <ErrorState message={error} onRefresh={onRefresh} />;
+  if (!html)   return null;
+  return (
+    <>
+      <RefreshButton onClick={onRefresh} />
+      <iframe srcDoc={html} style={{ width: '100%', height: '2200px', border: 'none' }} />
+    </>
+  );
+}
+
+function LoadingState() {
+  return (
+    <div style={{ padding: '60px 0', textAlign: 'center', color: '#555' }}>
+      <div style={{ fontSize: 32, marginBottom: 12 }}>⏳</div>
+      <p style={{ fontSize: 15 }}>Generating visualisation — this may take a moment…</p>
+      <p style={{ fontSize: 12, color: '#999', marginTop: 6 }}>
+        The backend is querying the database and building the charts.
+      </p>
+    </div>
+  );
+}
+
+function ErrorState({ message, onRefresh }) {
+  return (
+    <div style={{ padding: '40px 20px', textAlign: 'center', color: '#c00' }}>
+      <p style={{ fontWeight: 'bold', marginBottom: 8 }}>Failed to load page</p>
+      <p style={{ fontSize: 13, color: '#555', marginBottom: 16 }}>{message}</p>
+      <button onClick={onRefresh} style={btnStyle}>Retry</button>
+    </div>
+  );
+}
+
+function RefreshButton({ onClick }) {
+  return (
+    <div style={{ textAlign: 'right', marginBottom: 6 }}>
+      <button onClick={onClick} style={btnStyle} title="Clear cache and reload from backend">
+        ↺ Refresh
+      </button>
+    </div>
+  );
+}
+
+const btnStyle = {
+  background: '#2f5d8c', color: '#fff', border: 'none', borderRadius: 6,
+  padding: '5px 14px', fontSize: 12, cursor: 'pointer',
+};
 
 export default ResidentFinancialHealthPage;

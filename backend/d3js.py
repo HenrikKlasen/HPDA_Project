@@ -3147,6 +3147,96 @@ drawParallelCoords();
 	return page.replace("__DATA__", _json.dumps(data))
 
 
+def _get_transition_matrix(conn):
+	"""Compute employer transition matrix across all sampled time steps."""
+	tbl_rows = conn.execute(
+		"SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'participantstatuslogs%'"
+	).fetchall()
+	tables = sorted(
+		[r[0] for r in tbl_rows],
+		key=lambda t: int(re.search(r"(\d+)$", t).group(1)),
+	)
+	if len(tables) < 2:
+		return {"employers": [], "matrix": [], "timeseries": [], "steps": []}
+
+	# jobId → employerId lookup
+	jobs_emp = pd.read_sql_query("SELECT jobId, employerId FROM jobs", conn)
+	jobs_emp["jobId"]      = pd.to_numeric(jobs_emp["jobId"],      errors="coerce")
+	jobs_emp["employerId"] = pd.to_numeric(jobs_emp["employerId"], errors="coerce")
+	jobs_emp = jobs_emp.dropna()
+
+	# Sample every 4th table → ~18 snapshots
+	stride  = max(1, len(tables) // 18)
+	sampled = tables[::stride]
+
+	def get_employers(tbl):
+		df = pd.read_sql_query(
+			f"""SELECT participantId, jobId, COUNT(*) AS cnt
+			    FROM "{tbl}"
+			    WHERE jobId IS NOT NULL
+			      AND TRIM(CAST(jobId AS TEXT)) NOT IN ('','N/A','nan')
+			    GROUP BY participantId, jobId""",
+			conn,
+		)
+		if df.empty:
+			return pd.DataFrame(columns=["participantId", "employerId"])
+		top = (df.sort_values("cnt", ascending=False)
+		          .groupby("participantId").first()
+		          .reset_index()[["participantId", "jobId"]])
+		top["jobId"] = pd.to_numeric(top["jobId"], errors="coerce")
+		top = top.dropna(subset=["jobId"])
+		merged = top.merge(jobs_emp, on="jobId", how="left")
+		return merged[["participantId", "employerId"]].dropna(subset=["employerId"])
+
+	all_transitions = []
+	prev_df = get_employers(sampled[0])
+
+	for step_i, tbl in enumerate(sampled[1:], 1):
+		curr_df = get_employers(tbl)
+		merged  = prev_df.merge(curr_df, on="participantId", suffixes=("_from", "_to"))
+		changed = merged[merged["employerId_from"] != merged["employerId_to"]]
+		if not changed.empty:
+			counts = (
+				changed
+				.groupby(["employerId_from", "employerId_to"])
+				.size().reset_index(name="count")
+			)
+			for _, row in counts.iterrows():
+				all_transitions.append({
+					"step":  step_i,
+					"from":  int(row["employerId_from"]),
+					"to":    int(row["employerId_to"]),
+					"count": int(row["count"]),
+				})
+		prev_df = curr_df
+
+	if not all_transitions:
+		return {"employers": [], "matrix": [], "timeseries": [], "steps": []}
+
+	trans_df = pd.DataFrame(all_transitions)
+
+	# Keep top 15 employers by total transition activity (from + to)
+	from_vol = trans_df.groupby("from")["count"].sum()
+	to_vol   = trans_df.groupby("to")["count"].sum()
+	top_emp  = list(from_vol.add(to_vol, fill_value=0).nlargest(15).index.astype(int))
+
+	agg     = trans_df.groupby(["from", "to"])["count"].sum().reset_index()
+	agg_top = agg[agg["from"].isin(top_emp) & agg["to"].isin(top_emp)]
+	matrix  = [
+		{"from": int(r["from"]), "to": int(r["to"]), "count": int(r["count"])}
+		for _, r in agg_top.iterrows()
+	]
+	ts_top = [t for t in all_transitions if t["from"] in top_emp and t["to"] in top_emp]
+
+	steps = list(range(1, len(sampled)))
+	return {
+		"employers":  top_emp,
+		"matrix":     matrix,
+		"timeseries": ts_top,
+		"steps":      steps,
+	}
+
+
 @app.route("/api/employment-page", methods=["GET"])
 def employment_page():
 	"""Combined Employment & Turnover dashboard: 4 charts in one page."""
@@ -3178,63 +3268,13 @@ def employment_page():
 			conn,
 		)
 
-		# ── 4. Job transitions sankey ──────────────────────────────────────
-		tbl_rows = conn.execute(
-			"SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'participantstatuslogs%'"
-		).fetchall()
-		tables = sorted([r[0] for r in tbl_rows],
-		                key=lambda t: int(re.search(r"(\d+)$", t).group(1)))
-
-		sankey_nodes, sankey_links = [], []
-		if len(tables) >= 2:
-			jobs_edu = pd.read_sql_query(
-				"SELECT jobId, educationRequirement FROM jobs WHERE educationRequirement IS NOT NULL",
-				conn,
-			)
-
-			def dominant_sector(tbl: str) -> pd.DataFrame:
-				df = pd.read_sql_query(
-					f"""SELECT participantId, jobId, COUNT(*) AS cnt
-					    FROM "{tbl}"
-					    WHERE jobId IS NOT NULL
-					      AND TRIM(CAST(jobId AS TEXT)) NOT IN ('','N/A','nan')
-					    GROUP BY participantId, jobId""",
-					conn,
-				)
-				if df.empty:
-					return pd.DataFrame(columns=["participantId","educationRequirement"])
-				top = (df.sort_values("cnt", ascending=False)
-				         .groupby("participantId").first().reset_index()
-				         [["participantId","jobId"]])
-				top["jobId"] = pd.to_numeric(top["jobId"], errors="coerce")
-				return top.merge(jobs_edu, on="jobId", how="left")[
-					["participantId","educationRequirement"]].dropna()
-
-			start_s = dominant_sector(tables[0])
-			end_s   = dominant_sector(tables[-1])
-
-			if not start_s.empty and not end_s.empty:
-				merged_s = start_s.merge(end_s, on="participantId",
-				                         suffixes=("_start","_end"))
-				flows = (merged_s
-				         .groupby(["educationRequirement_start","educationRequirement_end"])
-				         .size().reset_index(name="count"))
-				edu_order = ["Low","HighSchoolOrCollege","Bachelors","Graduate"]
-				left_lbls  = [f"{e} (Start)" for e in edu_order
-				              if e in flows["educationRequirement_start"].values]
-				right_lbls = [f"{e} (End)"   for e in edu_order
-				              if e in flows["educationRequirement_end"].values]
-				all_lbls   = left_lbls + [l for l in right_lbls if l not in left_lbls]
-				node_idx   = {lbl: i for i, lbl in enumerate(all_lbls)}
-				sankey_nodes = [{"id": i, "name": lbl} for lbl, i in node_idx.items()]
-				sankey_links = [
-					{"source": node_idx[f"{r['educationRequirement_start']} (Start)"],
-					 "target": node_idx[f"{r['educationRequirement_end']} (End)"],
-					 "value":  int(r["count"])}
-					for _, r in flows.iterrows()
-					if f"{r['educationRequirement_start']} (Start)" in node_idx
-					and f"{r['educationRequirement_end']} (End)" in node_idx
-				]
+		try:
+			transitions_data = _get_transition_matrix(conn)
+		except Exception as _tm_err:
+			import traceback
+			print(f"[transition matrix] ERROR: {_tm_err}")
+			traceback.print_exc()
+			transitions_data = {"sectors": [], "matrix": [], "timeseries": [], "steps": []}
 	finally:
 		conn.close()
 
@@ -3283,10 +3323,10 @@ def employment_page():
 		}
 
 	data = {
-		"turnover":       turnover,
+		"turnover":        turnover,
 		"small_multiples": sm_data,
-		"workforce":      wf_data,
-		"sankey":         {"nodes": sankey_nodes, "links": sankey_links},
+		"workforce":       wf_data,
+		"transitions":     transitions_data,
 	}
 	html = _render_employment_html(data)
 	return html, 200, {"Content-Type": "text/html; charset=utf-8"}
@@ -3342,17 +3382,17 @@ body{font-family:Arial,sans-serif;background:#f4f5f7;color:#222;padding:16px}
     <p class="chart-note">Active wage earners (green, left axis) and avg wage per worker (orange, right axis)</p>
     <div id="ch-workforce"></div>
   </div>
-  <div class="chart-panel">
-    <h3>Job Transitions Between Sectors</h3>
-    <p class="chart-note">Participant movement by job sector (education requirement) — first vs last period</p>
-    <div id="ch-sankey"></div>
+  <div class="chart-panel" style="grid-column:1/-1">
+    <h3>Employer Transition Matrix</h3>
+    <p class="chart-note">Total times workers moved between the 15 most active employers across all sampled snapshots. Click any cell to see how that flow changed over time.</p>
+    <div id="ch-matrix"></div>
+    <div id="matrix-ts" style="display:none;border-top:1px solid #eee;padding-top:10px;margin-top:10px"></div>
   </div>
 </div>
 
 <div class="tooltip" id="tip"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/d3-sankey@0.12/dist/d3-sankey.min.js"></script>
 <script>
 const DATA = __DATA__;
 const tip  = d3.select('#tip');
@@ -3529,56 +3569,205 @@ function highlightSmall(){
   });
 })();
 
-// ── Sankey ───────────────────────────────────────────────────────────────
-(function drawSankey(){
-  const {nodes, links} = DATA.sankey;
-  if(!nodes.length||!links.length) return;
-  const el = document.getElementById('ch-sankey');
-  const W = el.clientWidth||420, H = 320;
-  const m = {top:10,right:10,bottom:10,left:10};
-  const w = W-m.left-m.right, h = H-m.top-m.bottom;
+// ── Employer Transition Matrix ───────────────────────────────────────────
+(function(){
+  const D = DATA.transitions;
+  if(!D||!D.employers||!D.employers.length){
+    document.getElementById('ch-matrix').innerHTML=
+      '<p style="color:#c00;padding:16px;font-size:12px">No employer transition data returned — check backend logs.</p>';
+    return;
+  }
+  if(!D.matrix.length){
+    document.getElementById('ch-matrix').innerHTML=
+      `<p style="color:#888;padding:16px;font-size:12px">No employer changes detected across ${D.steps.length} sampled snapshots.</p>`;
+    return;
+  }
 
-  const layout = d3.sankey()
-    .nodeId(d=>d.id).nodeWidth(14).nodePadding(14)
-    .extent([[0,0],[w,h]]);
+  const emps  = D.employers;   // array of employerId numbers, sorted by activity
+  const steps = D.steps;
+  const N     = emps.length;
 
-  const {nodes:sn, links:sl} = layout({
-    nodes: nodes.map(d=>({...d})),
-    links: links.map(d=>({...d})),
+  // aggregate lookup  agg[from][to] = total count
+  const agg = {};
+  D.matrix.forEach(d=>{ if(!agg[d.from]) agg[d.from]={}; agg[d.from][d.to]=d.count; });
+
+  // time-series lookup  ts[from][to] = [{step,count},...]
+  const ts = {};
+  D.timeseries.forEach(d=>{
+    if(!ts[d.from]) ts[d.from]={};
+    if(!ts[d.from][d.to]) ts[d.from][d.to]=[];
+    ts[d.from][d.to].push(d);
   });
 
-  const color = d3.scaleOrdinal()
-    .domain(['Low','HighSchoolOrCollege','Bachelors','Graduate'])
-    .range(['#e41a1c','#ff7f00','#4daf4a','#377eb8']);
-  const nodeColor = d=>color(d.name.replace(/ \(.*\)/,''));
+  const maxC = d3.max(D.matrix,d=>d.count)||1;
+  const el   = document.getElementById('ch-matrix');
+  const W    = Math.max(el.clientWidth||700, 400);
 
-  const svg = d3.select(el).append('svg').attr('width',W).attr('height',H);
+  // Left margin fits "Emp 123" labels; cell size fills remaining width
+  const m    = {top:80, right:20, bottom:48, left:68};
+  const cell = Math.max(22, Math.floor((W - m.left - m.right) / N));
+  const gW   = cell * N;
+  const gH   = cell * N;
+  const SVG_W= m.left + gW + m.right;
+  const SVG_H= m.top  + gH + m.bottom;
+
+  const color = d3.scaleSequential([0, maxC], d3.interpolateBlues);
+  const label = id => `Emp ${id}`;
+
+  const svg = d3.select(el).append('svg').attr('width',SVG_W).attr('height',SVG_H);
   const g   = svg.append('g').attr('transform',`translate(${m.left},${m.top})`);
 
-  g.selectAll('path').data(sl).join('path')
-    .attr('d',d3.sankeyLinkHorizontal())
-    .attr('fill','none')
-    .attr('stroke',d=>nodeColor(d.source))
-    .attr('stroke-width',d=>Math.max(1,d.width))
-    .attr('opacity',0.38)
-    .on('mouseover',(ev,d)=>showTip(`${d.source.name} → ${d.target.name}<br>Count: ${d.value}`,ev))
-    .on('mouseout',hideTip);
+  let selCell = null;
 
-  g.selectAll('rect').data(sn).join('rect')
-    .attr('x',d=>d.x0).attr('y',d=>d.y0)
-    .attr('width',d=>d.x1-d.x0).attr('height',d=>Math.max(1,d.y1-d.y0))
-    .attr('fill',nodeColor).attr('opacity',0.9)
-    .on('mouseover',(ev,d)=>showTip(`${d.name}<br>Flow: ${d.value}`,ev))
-    .on('mouseout',hideTip);
+  emps.forEach((from, ri)=>{
+    emps.forEach((to, ci)=>{
+      const count  = (agg[from]||{})[to]||0;
+      const isDiag = from === to;
+      const cg = g.append('g').attr('class','mc')
+        .attr('transform',`translate(${ci*cell},${ri*cell})`);
 
-  g.selectAll('text').data(sn).join('text')
-    .attr('x',d=>d.x0<w/2?d.x1+5:d.x0-5)
-    .attr('y',d=>(d.y0+d.y1)/2)
-    .attr('dy','0.35em')
-    .attr('text-anchor',d=>d.x0<w/2?'start':'end')
-    .attr('font-size',10)
-    .text(d=>`${d.name.replace(/ \(.*\)/,'')} (${d.value})`);
+      cg.append('rect')
+        .attr('width',cell-1).attr('height',cell-1).attr('rx',2)
+        .attr('fill', isDiag ? '#f0f0f0' : count>0 ? color(count) : '#fafafa')
+        .attr('stroke','#e0e0e0').attr('stroke-width',0.5);
+
+      // Only show count text if cell is large enough
+      if(!isDiag && count>0 && cell>=32){
+        cg.append('text')
+          .attr('x',cell/2).attr('y',cell/2)
+          .attr('text-anchor','middle').attr('dominant-baseline','middle')
+          .attr('font-size', cell>=44 ? 10 : 8).attr('font-weight','bold')
+          .attr('fill', count > maxC*0.5 ? '#fff' : '#222')
+          .text(count);
+      }
+
+      if(!isDiag && count>0){
+        cg.style('cursor','pointer')
+          .on('mouseover',(ev)=>{
+            cg.select('rect').attr('stroke','#2f5d8c').attr('stroke-width',2);
+            showTip(`<b>${label(from)}</b> → <b>${label(to)}</b><br>`+
+              `Total moves: <b>${count.toLocaleString()}</b><br><em>Click to see over time</em>`,ev);
+          })
+          .on('mouseout',()=>{
+            if(!selCell||selCell[0]!==from||selCell[1]!==to)
+              cg.select('rect').attr('stroke','#e0e0e0').attr('stroke-width',0.5);
+            hideTip();
+          })
+          .on('click',()=>{
+            g.selectAll('.mc rect').attr('stroke','#e0e0e0').attr('stroke-width',0.5);
+            if(selCell&&selCell[0]===from&&selCell[1]===to){
+              selCell=null;
+              document.getElementById('matrix-ts').style.display='none';
+            } else {
+              selCell=[from,to];
+              cg.select('rect').attr('stroke','#2f5d8c').attr('stroke-width',2.5);
+              drawMatrixTS(label(from), label(to), (ts[from]||{})[to]||[], steps);
+            }
+          });
+      } else if(isDiag){
+        cg.append('line')
+          .attr('x1',3).attr('y1',3).attr('x2',cell-5).attr('y2',cell-5)
+          .attr('stroke','#ccc').attr('stroke-width',1).attr('stroke-dasharray','2,2');
+      }
+    });
+  });
+
+  // Column labels — rotated, top
+  emps.forEach((id, ci)=>{
+    g.append('text')
+      .attr('x', ci*cell + cell/2).attr('y',-6)
+      .attr('text-anchor','start').attr('font-size', Math.min(10, cell-2)).attr('fill','#444')
+      .attr('transform',`rotate(-45,${ci*cell+cell/2},-6)`)
+      .text(label(id));
+  });
+
+  // Row labels — left
+  emps.forEach((id, ri)=>{
+    g.append('text')
+      .attr('x',-6).attr('y', ri*cell + cell/2)
+      .attr('text-anchor','end').attr('dominant-baseline','middle')
+      .attr('font-size', Math.min(10, cell-2)).attr('fill','#444')
+      .text(label(id));
+  });
+
+  // Axis titles
+  g.append('text').attr('x',gW/2).attr('y',-58)
+    .attr('text-anchor','middle').attr('font-size',11).attr('fill','#555')
+    .text('To employer →');
+  g.append('text').attr('transform','rotate(-90)')
+    .attr('x',-(gH/2)).attr('y',-56)
+    .attr('text-anchor','middle').attr('font-size',11).attr('fill','#555')
+    .text('From employer →');
+
+  // Color legend
+  const defs = svg.append('defs');
+  const grd  = defs.append('linearGradient').attr('id','matGrd').attr('x1','0%').attr('x2','100%');
+  grd.append('stop').attr('offset','0%').attr('stop-color',color(0));
+  grd.append('stop').attr('offset','100%').attr('stop-color',color(maxC));
+  const legW = Math.min(gW, 200);
+  const legG = svg.append('g').attr('transform',`translate(${m.left},${m.top+gH+16})`);
+  legG.append('rect').attr('width',legW).attr('height',8).attr('fill','url(#matGrd)').attr('rx',2);
+  legG.append('text').attr('x',0).attr('y',20).attr('font-size',9).attr('fill','#777').text('0 moves');
+  legG.append('text').attr('x',legW).attr('y',20).attr('text-anchor','end')
+    .attr('font-size',9).attr('fill','#777').text(maxC.toLocaleString()+' moves');
 })();
+
+function drawMatrixTS(fromLabel, toLabel, pairs, allSteps){
+  const el = document.getElementById('matrix-ts');
+  el.style.display = 'block';
+  d3.select(el).selectAll('*').remove();
+
+  const sMap = {}; pairs.forEach(d=>sMap[d.step]=d.count);
+  const data = allSteps.map(s=>({step:s, count:sMap[s]||0}));
+
+  const hdr = document.createElement('div');
+  hdr.style.cssText = 'font-size:12px;font-weight:bold;color:#2f5d8c;margin-bottom:4px;display:flex;justify-content:space-between;align-items:center';
+  hdr.innerHTML = `<span>${fromLabel} → ${toLabel} — worker moves over time</span>
+    <span style="cursor:pointer;color:#aaa;font-weight:normal;font-size:14px"
+      onclick="document.getElementById('matrix-ts').style.display='none'">&#x2715;</span>`;
+  el.appendChild(hdr);
+
+  const note = document.createElement('div');
+  note.style.cssText = 'font-size:10px;color:#999;margin-bottom:8px';
+  note.textContent   = `${allSteps.length} sampled snapshots — each point is one comparison between consecutive snapshots`;
+  el.appendChild(note);
+
+  const W2=el.clientWidth||360, H2=130;
+  const m2={top:8,right:16,bottom:28,left:36};
+  const w2=W2-m2.left-m2.right, h2=H2-m2.top-m2.bottom;
+
+  const svg2 = d3.select(el).append('svg').attr('width',W2).attr('height',H2);
+  const g2   = svg2.append('g').attr('transform',`translate(${m2.left},${m2.top})`);
+
+  const x2 = d3.scaleLinear().domain([d3.min(allSteps),d3.max(allSteps)]).range([0,w2]);
+  const y2 = d3.scaleLinear().domain([0,d3.max(data,d=>d.count)||1]).nice().range([h2,0]);
+
+  const area2 = d3.area().x(d=>x2(d.step)).y0(h2).y1(d=>y2(d.count)).curve(d3.curveMonotoneX);
+  const line2 = d3.line().x(d=>x2(d.step)).y(d=>y2(d.count)).curve(d3.curveMonotoneX);
+
+  // Gridlines
+  g2.append('g').attr('class','grid')
+    .call(d3.axisLeft(y2).ticks(4).tickSize(-w2).tickFormat(''))
+    .call(ax=>{ax.select('.domain').remove(); ax.selectAll('.tick line').attr('stroke','#eee');});
+
+  g2.append('path').datum(data).attr('fill','#bfdbfe').attr('opacity',0.5).attr('d',area2);
+  g2.append('path').datum(data).attr('fill','none')
+    .attr('stroke','#2f5d8c').attr('stroke-width',2).attr('d',line2);
+
+  g2.selectAll('circle').data(data.filter(d=>d.count>0)).join('circle')
+    .attr('cx',d=>x2(d.step)).attr('cy',d=>y2(d.count)).attr('r',3)
+    .attr('fill','#1e3a8a')
+    .on('mouseover',(ev,d)=>showTip(`Snapshot ${d.step}: ${d.count} transitions`,ev))
+    .on('mouseout',hideTip);
+
+  g2.append('g').attr('transform',`translate(0,${h2})`)
+    .call(d3.axisBottom(x2).ticks(Math.min(allSteps.length,10))
+      .tickFormat(d=>`S${d}`).tickSize(2))
+    .call(ax=>{ax.selectAll('text').attr('font-size',8); ax.select('.domain').attr('stroke','#ccc');});
+  g2.append('g')
+    .call(d3.axisLeft(y2).ticks(4))
+    .call(ax=>{ax.select('.domain').remove(); ax.selectAll('text').attr('font-size',9);});
+}
 
 // initial draw
 drawRanking();
