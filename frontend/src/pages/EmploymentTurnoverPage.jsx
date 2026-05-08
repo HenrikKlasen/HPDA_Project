@@ -1,4 +1,25 @@
+import React, { useMemo, useEffect, useState } from 'react';
+
 function EmploymentTurnoverPage() {
+    const [iframeContent, setIframeContent] = useState(null);
+  
+    useEffect(() => {
+      const cachedContent = localStorage.getItem('residentFinancialContent');
+      if (cachedContent) {
+        setIframeContent(cachedContent);
+      } else {
+        fetch('http://localhost:5000/api/resident-financial-page')
+          .then(res => res.text())
+          .then(html => {
+            localStorage.setItem('residentFinancialContent', html);
+            setIframeContent(html);
+          })
+          .catch(error => {
+            console.error('Failed to fetch resident financial content:', error);
+          });
+      }
+    }, []);
+  
   return (
     <section>
       <div className="section-intro">
@@ -8,33 +29,10 @@ function EmploymentTurnoverPage() {
         </p>
       </div>
 
-      <div className="chart-grid">
-
-        <div className="chart-card">
-          <h3>Turnover Ranking by Employer</h3>
-          <p className="chart-note">Employers ranked by worker turnover count — departed vs arrived workers.</p>
-          <div className="chart-placeholder">Chart placeholder — stacked bar ranking</div>
-        </div>
-
-        <div className="chart-card">
-          <h3>Monthly Worker Count — Small Multiples</h3>
-          <p className="chart-note">Monthly workplace check-in counts per employer (top 16).</p>
-          <div className="chart-placeholder">Chart placeholder — small multiples grid</div>
-        </div>
-
-        <div className="chart-card">
-          <h3>Workforce Participation Over Time</h3>
-          <p className="chart-note">Active wage earners (left axis) and average wage per worker (right axis) by month.</p>
-          <div className="chart-placeholder">Chart placeholder — dual-axis line chart</div>
-        </div>
-
-        <div className="chart-card">
-          <h3>Job Transitions Between Sectors</h3>
-          <p className="chart-note">Participant movement by job sector between the first and last study period.</p>
-          <div className="chart-placeholder">Chart placeholder — Sankey diagram</div>
-        </div>
-
-      </div>
+      {iframeContent && (
+        <iframe srcDoc={iframeContent} style={{ width: '100%', height: '2000px', border: 'none' }} />
+      )}
+  
     </section>
   );
 }

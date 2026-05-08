@@ -14,6 +14,8 @@ def csv_to_json(csv_file, json_file):
             row.pop("maxOccupancy", None)  # Remove the 'maxOccupancy' field
             row.pop("units", None)
             row["id"] = row["buildingId"]  # Rename 'buildingID' to 'id'
+            row["type"] = row["buildingType"]  # Add a new field 'type' with value 'Feature'
+            row.pop("buildingType", None)  # Remove the original 'buildingType' field
             row.pop("buildingId", None)  # Remove the original 'buildingID' field
             data.append(row)
 
