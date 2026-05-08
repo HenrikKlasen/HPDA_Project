@@ -1,0 +1,428 @@
+:root {
+  --bg: #f4f5f7;
+  --card: #ffffff;
+  --text: #222;
+  --muted: #777;
+  --border: #ddd;
+  --accent: #2f5d8c;
+  --accent-light: #e7eef7;
+  --shadow: 0 1px 5px rgba(0,0,0,0.12);
+  font-family: Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  color: var(--text);
+  background: var(--bg);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+/* ---------- App Shell ---------- */
+
+.app-shell {
+  min-height: 100vh;
+}
+
+.app-header {
+  background: var(--card);
+  padding: 22px 32px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+}
+
+.app-header h1 {
+  margin: 0 0 6px;
+  font-size: 24px;
+}
+
+.app-header p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.app-main {
+  max-width: 1500px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+/* ---------- Filter bar ---------- */
+
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  align-items: center;
+  background: var(--card);
+  padding: 14px 18px;
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  margin-bottom: 18px;
+  font-size: 13px;
+}
+
+.filter-bar label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+select,
+input[type="month"] {
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: white;
+  font-size: 13px;
+}
+
+/* ---------- Tab bar ---------- */
+
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+.tab-link {
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--text);
+  padding: 10px 16px;
+  border-radius: 10px 10px 0 0;
+  cursor: pointer;
+  font-size: 14px;
+  text-decoration: none;
+  display: inline-block;
+  transition: background 0.15s;
+}
+
+.tab-link:hover {
+  background: var(--accent-light);
+}
+
+.tab-link.active {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+
+/* ---------- Shared layout ---------- */
+
+.section-intro {
+  background: var(--card);
+  padding: 18px 22px;
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  margin-bottom: 18px;
+}
+
+.section-intro h2 {
+  margin: 0 0 8px;
+  font-size: 20px;
+}
+
+.section-intro p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.kpi-card {
+  background: var(--card);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  padding: 14px;
+  min-height: 80px;
+}
+
+.kpi-card .label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+
+.kpi-card .value {
+  font-size: 22px;
+  font-weight: bold;
+}
+
+.chart-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.chart-card {
+  background: var(--card);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  padding: 18px;
+  min-height: 360px;
+}
+
+.chart-card.large {
+  min-height: 520px;
+}
+
+.chart-card.full-width {
+  grid-column: 1 / -1;
+}
+
+.chart-card h3 {
+  margin: 0 0 5px;
+  font-size: 16px;
+}
+
+.chart-card .chart-note {
+  margin: 0 0 14px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.chart-placeholder {
+  border: 2px dashed #c9cdd3;
+  border-radius: 10px;
+  background: #fafafa;
+  min-height: 260px;
+  padding: 20px;
+  color: #555;
+  font-size: 14px;
+  line-height: 1.5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  white-space: pre-line;
+}
+
+.map-layout {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 18px;
+}
+
+.details-panel {
+  background: var(--card);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  padding: 18px;
+  min-height: 520px;
+}
+
+.details-panel h3 {
+  margin-top: 0;
+}
+
+.details-row {
+  display: flex;
+  justify-content: space-between;
+  border-bottom: 1px solid #eee;
+  padding: 9px 0;
+  font-size: 13px;
+}
+
+.answer-box {
+  background: var(--accent-light);
+  border-left: 4px solid var(--accent);
+  padding: 12px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  color: #333;
+  margin-bottom: 14px;
+  line-height: 1.5;
+}
+
+/* ---------- Responsive ---------- */
+
+@media (max-width: 1100px) {
+  .kpi-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  .chart-grid,
+  .map-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 700px) {
+  .kpi-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .app-main {
+    padding: 14px;
+  }
+}
+
+/* ---------- Legacy styles (used by existing chart components) ---------- */
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1rem;
+  box-shadow: var(--shadow);
+}
+
+.kpi-title {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.kpi-value {
+  margin: 0.4rem 0 0;
+  font-size: 1.5rem;
+  font-weight: 700;
+}
+
+.filters {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+
+.chart-title {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+}
+
+.chart-svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.map-svg {
+  background: transparent;
+}
+
+.chart-wrap {
+  position: relative;
+}
+
+.chart-tooltip {
+  position: absolute;
+  top: 0.4rem;
+  right: 0.4rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  background: rgba(17, 24, 39, 0.92);
+  color: #f9fafb;
+  border-radius: 8px;
+  padding: 0.45rem 0.6rem;
+  font-size: 0.8rem;
+  pointer-events: none;
+  width: 140px;
+}
+
+.legend-item {
+  cursor: pointer;
+}
+
+.map-card {
+  margin-bottom: 1rem;
+}
+
+.map-header {
+  margin-bottom: 0.5rem;
+}
+
+.map-subtitle {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.map-filters {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.75rem;
+}
+
+.map-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: #374151;
+  border-radius: 999px;
+  padding: 0.3rem 0.65rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.map-chip.active {
+  border-color: #9ca3af;
+  background: var(--bg);
+}
+
+.map-chip-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  display: inline-block;
+}
+
+.section-title {
+  margin: 0;
+}
+
+.page-subtitle {
+  margin: 0.25rem 0 1rem;
+  color: var(--muted);
+}
+
+.simple-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.simple-list li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid #e5e7eb;
+  padding: 0.55rem 0;
+}
+
+.simple-list li:last-child {
+  border-bottom: 0;
+}
+
+.grid {
+  display: grid;
+  gap: 1rem;
+}
+
+.grid.kpis {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  margin-bottom: 1rem;
+}
+
+.grid.charts {
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+}
