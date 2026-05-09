@@ -3711,45 +3711,75 @@ drawParallelCoords();
 
 @app.route("/api/employment-page", methods=["GET"])
 def employment_page():
-    """Combined Employment & Turnover dashboard: Only Workforce participation remain."""
+    """Combined Employment dashboard: Workforce participation, shifts, happiness, and hourly activity."""
     if not DB_PATH.exists():
         return jsonify({"error": f"Database not found: {DB_PATH}"}), 404
 
     conn = _get_db_connection()
     try:
-        # ── 3. Workforce participation ─────────────────────────────────────
+        # 1. Workforce participation
         wf_df = pd.read_sql_query(
             """SELECT strftime('%Y-%m', timestamp) AS month,
-			          COUNT(DISTINCT participantId) AS active_workers,
-			          SUM(amount)/COUNT(DISTINCT participantId) AS avg_wage
-			   FROM financialjournal WHERE category='Wage'
-			   GROUP BY month ORDER BY month""",
+                      COUNT(DISTINCT participantId) AS active_workers,
+                      SUM(amount)/COUNT(DISTINCT participantId) AS avg_wage
+               FROM financialjournal WHERE category='Wage'
+               GROUP BY month ORDER BY month""",
+            conn,
+        )
+
+        # 2. Shift starts (Jobs)
+        shift_df = pd.read_sql_query(
+            "SELECT startTime, COUNT(*) as count FROM jobs GROUP BY startTime ORDER BY startTime",
+            conn,
+        )
+
+        # 3. Wage vs Joviality
+        happiness_df = pd.read_sql_query(
+            """SELECT p.joviality, SUM(f.amount)/12 as avg_wage
+               FROM participants p
+               JOIN financialjournal f ON p.participantId = f.participantId
+               WHERE f.category = 'Wage'
+               GROUP BY p.participantId LIMIT 2000""",
+            conn,
+        )
+
+        # 4. Hourly Workplace Activity
+        hourly_df = pd.read_sql_query(
+            """SELECT strftime('%H', timestamp) as hour, COUNT(*) as count
+               FROM checkinjournal
+               WHERE venueType = 'Workplace'
+               GROUP BY hour ORDER BY hour""",
             conn,
         )
     finally:
         conn.close()
 
-    # ── Build workforce data ───────────────────────────────────────────────
-    wf_data = {"months": [], "series": []}
-    if not wf_df.empty:
-        wf_data = {
-            "months": wf_df["month"].tolist(),
-            "series": [
-                {
-                    "name": "Active Wage Earners",
-                    "values": [int(v) for v in wf_df["active_workers"].tolist()],
-                    "color": "#2ca02c",
-                },
-                {
-                    "name": "Avg Wage / Worker ($)",
-                    "values": [round(float(v), 2) for v in wf_df["avg_wage"].tolist()],
-                    "color": "#ff7f0e",
-                },
-            ],
-        }
+    # Build workforce data
+    wf_data = {"months": wf_df["month"].tolist(), "series": [
+        {"name": "Active Workers", "values": wf_df["active_workers"].tolist(), "color": "#2ca02c"},
+        {"name": "Avg Monthly Wage", "values": [round(v, 2) for v in wf_df["avg_wage"].tolist()], "color": "#ff7f0e"}
+    ]} if not wf_df.empty else {"months": [], "series": []}
+
+    # Build shift data
+    shift_data = {
+        "labels": shift_df["startTime"].tolist(),
+        "values": shift_df["count"].tolist()
+    } if not shift_df.empty else {"labels": [], "values": []}
+
+    # Build happiness data (scatter)
+    happiness_points = happiness_df.dropna().to_dict(orient="records") if not happiness_df.empty else []
+
+    # Build hourly activity
+    hourly_data = {
+        "labels": [f"{int(h):02d}:00" for h in hourly_df["hour"].tolist()],
+        "values": hourly_df["count"].tolist()
+    } if not hourly_df.empty else {"labels": [], "values": []}
 
     data = {
         "workforce": wf_data,
+        "shifts": shift_data,
+        "happiness": happiness_points,
+        "hourly": hourly_data
     }
     html = _render_employment_html(data)
     return html, 200, {"Content-Type": "text/html; charset=utf-8"}
@@ -4011,24 +4041,51 @@ def _render_employment_html(data: dict) -> str:
 <!DOCTYPE html>
 <html><head>
 <meta charset="utf-8">
-<title>Employment & Workforce Trends</title>
+<title>Employment Insights</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:Arial,sans-serif;background:#f4f5f7;color:#222;padding:16px}
-.chart-panel{background:#fff;border-radius:10px;padding:20px;box-shadow:0 1px 5px rgba(0,0,0,.1);max-width:900px;margin:0 auto}
-.chart-panel h3{font-size:18px;margin-bottom:8px}
+body{font-family:Arial,sans-serif;background:#f4f5f7;color:#222;padding:20px}
+.header { margin-bottom: 20px; text-align: center; }
+.header h2 { font-size: 24px; color: #2f5d8c; }
+.dashboard-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; }
+.chart-panel{background:#fff;border-radius:10px;padding:20px;box-shadow:0 1px 5px rgba(0,0,0,.1); min-height: 400px; display: flex; flex-direction: column;}
+.chart-panel h3{font-size:16px;margin-bottom:12px; display: flex; align-items: center;}
+.chart-panel.full-width { grid-column: span 2; }
 .tooltip { position: fixed; background: rgba(20, 20, 20, 0.92); color: #fff; padding: 8px 12px;
   border-radius: 6px; font-size: 12px; pointer-events: none; opacity: 0;
   transition: opacity 0.12s; line-height: 1.6; z-index: 1000; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
 .info-icon{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;
   background:#2f5d8c;color:#fff;border-radius:50%;font-size:9px;margin-left:6px;cursor:help;vertical-align:middle}
+.chart-container { flex-grow: 1; position: relative; }
+@media(max-width: 900px) { .dashboard-grid { grid-template-columns: 1fr; } .chart-panel.full-width { grid-column: span 1; } }
 </style>
 </head>
 <body>
 
-<div class="chart-panel">
-    <h3>Workforce Participation<span class="info-icon" onmouseover="showTip('<strong>City-wide trend</strong><br>Total active wage earners vs city-wide average monthly wage.', event)" onmouseout="hideTip()">?</span></h3>
-    <div id="ch-workforce" style="height:400px"></div>
+<div class="header">
+    <h2>Advanced Employment Analytics</h2>
+</div>
+
+<div class="dashboard-grid">
+    <div class="chart-panel full-width">
+        <h3>Workforce Participation & Wages <span class="info-icon" onmouseover="showTip('<strong>City-wide trends</strong><br>Tracks the volume of active workers and average monthly wage levels.', event)" onmouseout="hideTip()">?</span></h3>
+        <div id="ch-workforce" class="chart-container"></div>
+    </div>
+
+    <div class="chart-panel">
+        <h3>Shift Start Time Distribution <span class="info-icon" onmouseover="showTip('<strong>Workforce Timing</strong><br>Frequency of jobs starting at specific times of the day.', event)" onmouseout="hideTip()">?</span></h3>
+        <div id="ch-shifts" class="chart-container"></div>
+    </div>
+
+    <div class="chart-panel">
+        <h3>Workplace Activity by Hour <span class="info-icon" onmouseover="showTip('<strong>Daily Rythm</strong><br>Aggregated check-in volume at workplaces throughout the day.', event)" onmouseout="hideTip()">?</span></h3>
+        <div id="ch-hourly" class="chart-container"></div>
+    </div>
+
+    <div class="chart-panel full-width">
+        <h3>Wage vs. Happiness (Joviality) <span class="info-icon" onmouseover="showTip('<strong>Economic Psychology</strong><br>Scatter plot showing the relationship between average monthly wage and participant joviality.', event)" onmouseout="hideTip()">?</span></h3>
+        <div id="ch-happiness" class="chart-container"></div>
+    </div>
 </div>
 
 <div class="tooltip" id="tip"></div>
@@ -4042,61 +4099,155 @@ function showTip(html, ev) {
   tip.html(html).style('opacity', 1)
      .style('left', (ev.clientX + 15) + 'px').style('top', (ev.clientY - 45) + 'px');
 }
-function hideTip(){ tip.style('opacity',0); }
+function hideTip() { tip.style('opacity', 0); }
 
-// ── Workforce participation (dual axis) ──────────────────────────────────
+const colors = {
+    wage: "#ff7f0e",
+    workers: "#2ca02c",
+    activity: "#1f77b4",
+    shift: "#9467bd",
+    scatter: "#e377c2"
+};
+
+// ── 1. Workforce participation ──────────────────────────────────
 (function drawWorkforce(){
   const {months, series} = DATA.workforce;
   if(!months || !months.length) return;
   const el = document.getElementById('ch-workforce');
-  const W = el.clientWidth||800, H = 400;
-  const m3 = {top:20, right:60, bottom:50, left:60};
-  const w = W - m3.left - m3.right, h = H - m3.top - m3.bottom;
+  const W = el.clientWidth, H = el.clientHeight || 350;
+  const m = {top:20, right:60, bottom:50, left:60};
+  const w = W - m.left - m.right, h = H - m.top - m.bottom;
 
   const svg = d3.select(el).append('svg').attr('width',W).attr('height',H);
-  const g   = svg.append('g').attr('transform',`translate(${m3.left},${m3.top})`);
+  const g   = svg.append('g').attr('transform',`translate(${m.left},${m.top})`);
 
   const x   = d3.scalePoint().domain(months).range([0,w]);
   const yL  = d3.scaleLinear().domain([0, d3.max(series[0].values) * 1.1]).nice().range([h,0]);
   const yR  = d3.scaleLinear().domain([0, d3.max(series[1].values) * 1.1]).nice().range([h,0]);
-  const ln  = (ysc) => d3.line().x((_,i)=>x(months[i])).y(d=>ysc(d)).curve(d3.curveMonotoneX);
-
+  
   g.append('g').attr('transform',`translate(0,${h})`)
 	.call(d3.axisBottom(x).tickValues(months.filter((_,i)=>i%4===0)).tickSize(-h))
 	.call(ax=>{ax.selectAll('.tick line').attr('stroke','#eee');ax.select('.domain').remove();})
 	.selectAll('text').attr('transform','rotate(-30)').attr('text-anchor','end').attr('font-size',10);
 
-  g.append('g').call(d3.axisLeft(yL).ticks(6)).selectAll('text').attr('fill',series[0].color);
+  g.append('g').call(d3.axisLeft(yL).ticks(6)).selectAll('text').attr('fill', series[0].color);
   g.append('g').attr('transform',`translate(${w},0)`)
-	.call(d3.axisRight(yR).ticks(6).tickFormat(d=>'$'+d3.format(',.0f')(d)))
-	.selectAll('text').attr('fill',series[1].color);
-
-  // Y-axis labels
-  g.append('text').attr('transform', 'rotate(-90)').attr('y', -45).attr('x', -h/2)
-    .attr('text-anchor', 'middle').attr('fill', series[0].color).attr('font-size', 12).text('Active Workers');
-  g.append('text').attr('transform', 'rotate(90)').attr('y', -w - 45).attr('x', h/2)
-    .attr('text-anchor', 'middle').attr('fill', series[1].color).attr('font-size', 12).text('Avg Monthly Wage');
+	.call(d3.axisRight(yR).ticks(6).tickFormat(d=>'$'+d3.format(',.0s')(d)))
+	.selectAll('text').attr('fill', series[1].color);
 
   series.forEach((s,i)=>{
 	const ysc = i===0?yL:yR;
 	g.append('path').datum(s.values).attr('fill','none')
-	  .attr('stroke',s.color).attr('stroke-width',3).attr('d',ln(ysc));
+	  .attr('stroke',s.color).attr('stroke-width',3)
+      .attr('d', d3.line().x((_,idx)=>x(months[idx])).y(d=>ysc(d)).curve(d3.curveMonotoneX));
     
-    // Data points for tooltip
     g.selectAll(`.dot-${i}`).data(s.values).enter().append('circle')
-      .attr('cx', (_, idx) => x(months[idx]))
-      .attr('cy', d => ysc(d))
-      .attr('r', 4)
-      .attr('fill', s.color)
-      .on('mouseover', (ev, d) => {
-          const idx = s.values.indexOf(d);
-          showTip(`<strong>${months[idx]}</strong><br>${s.name}: ${i===0?d.toLocaleString():'$'+d.toLocaleString()}`, ev);
-      })
+      .attr('cx', (_, idx) => x(months[idx])).attr('cy', d => ysc(d)).attr('r', 4).attr('fill', s.color)
+      .on('mouseover', (ev, d) => showTip(`<strong>${months[s.values.indexOf(d)]}</strong><br>${s.name}: <strong>${i===0?d.toLocaleString():'$'+d.toLocaleString()}</strong>`, ev))
       .on('mouseout', hideTip);
   });
 })();
+
+// ── 2. Shift Starts (Bar) ───────────────────────────────────────
+(function drawShifts(){
+    const {labels, values} = DATA.shifts;
+    if(!labels.length) return;
+    const el = document.getElementById('ch-shifts');
+    const W = el.clientWidth, H = el.clientHeight || 350;
+    const m = {top:20, right:30, bottom:60, left:60};
+    const w = W - m.left - m.right, h = H - m.top - m.bottom;
+
+    const svg = d3.select(el).append('svg').attr('width', W).attr('height', H);
+    const g = svg.append('g').attr('transform', `translate(${m.left},${m.top})`);
+
+    const x = d3.scaleBand().domain(labels).range([0, w]).padding(0.2);
+    const y = d3.scaleLinear().domain([0, d3.max(values) * 1.1]).nice().range([h, 0]);
+
+    g.append('g').attr('transform', `translate(0, ${h})`).call(d3.axisBottom(x))
+     .selectAll('text').attr('transform', 'rotate(-45)').attr('text-anchor', 'end');
+    g.append('g').call(d3.axisLeft(y).ticks(5));
+
+    g.selectAll('.bar').data(values).enter().append('rect')
+     .attr('x', (_, i) => x(labels[i])).attr('y', d => y(d))
+     .attr('width', x.bandwidth()).attr('height', d => h - y(d))
+     .attr('fill', colors.shift).attr('opacity', 0.8)
+     .on('mouseover', (ev, d) => showTip(`Start Time: <strong>${labels[values.indexOf(d)]}</strong><br>Jobs: <strong>${d.toLocaleString()}</strong>`, ev))
+     .on('mouseout', hideTip);
+})();
+
+// ── 3. Hourly Activity (Area) ──────────────────────────────────
+(function drawHourly(){
+    const {labels, values} = DATA.hourly;
+    if(!labels.length) return;
+    const el = document.getElementById('ch-hourly');
+    const W = el.clientWidth, H = el.clientHeight || 350;
+    const m = {top:20, right:30, bottom:40, left:60};
+    const w = W - m.left - m.right, h = H - m.top - m.bottom;
+
+    const svg = d3.select(el).append('svg').attr('width', W).attr('height', H);
+    const g = svg.append('g').attr('transform', `translate(${m.left},${m.top})`);
+
+    const x = d3.scalePoint().domain(labels).range([0, w]);
+    const y = d3.scaleLinear().domain([0, d3.max(values) * 1.1]).nice().range([h, 0]);
+
+    const area = d3.area().x((_,i)=>x(labels[i])).y0(h).y1(d=>y(d)).curve(d3.curveMonotoneX);
+
+    g.append('path').datum(values).attr('fill', colors.activity).attr('opacity', 0.3).attr('d', area);
+    g.append('path').datum(values).attr('fill', 'none').attr('stroke', colors.activity).attr('stroke-width', 2).attr('d', d3.line().x((_,i)=>x(labels[i])).y(d=>y(d)).curve(d3.curveMonotoneX));
+
+    g.append('g').attr('transform', `translate(0, ${h})`).call(d3.axisBottom(x).tickValues(labels.filter((_,i)=>i%3===0)));
+    g.append('g').call(d3.axisLeft(y).ticks(5).tickFormat(d3.format('.2s')));
+
+    g.selectAll('.dot').data(values).enter().append('circle')
+     .attr('cx', (_, i) => x(labels[i])).attr('cy', d => y(d)).attr('r', 4).attr('fill', colors.activity)
+     .on('mouseover', (ev, d) => showTip(`Time: <strong>${labels[values.indexOf(d)]}</strong><br>Workplace Check-ins: <strong>${d.toLocaleString()}</strong>`, ev))
+     .on('mouseout', hideTip);
+})();
+
+// ── 4. Happiness Scatter ──────────────────────────────────────
+(function drawHappiness(){
+    const data = DATA.happiness;
+    if(!data.length) return;
+    const el = document.getElementById('ch-happiness');
+    const W = el.clientWidth, H = el.clientHeight || 350;
+    const m = {top:20, right:40, bottom:50, left:60};
+    const w = W - m.left - m.right, h = H - m.top - m.bottom;
+
+    const svg = d3.select(el).append('svg').attr('width', W).attr('height', H);
+    const g = svg.append('g').attr('transform', `translate(${m.left},${m.top})`);
+
+    const x = d3.scaleLinear().domain([0, d3.max(data, d=>d.avg_wage)]).nice().range([0, w]);
+    const y = d3.scaleLinear().domain([0, 1]).range([h, 0]);
+
+    g.append('g').attr('transform', `translate(0, ${h})`).call(d3.axisBottom(x).tickFormat(d=>'$'+d3.format('.2s')(d)));
+    g.append('g').call(d3.axisLeft(y).ticks(5));
+
+    // Labels
+    g.append('text').attr('x', w/2).attr('y', h+40).attr('text-anchor', 'middle').attr('font-size', 11).text('Estimated Monthly Wage ($)');
+    g.append('text').attr('transform', 'rotate(-90)').attr('x', -h/2).attr('y', -45).attr('text-anchor', 'middle').attr('font-size', 11).text('Joviality (Happiness Score)');
+
+    g.selectAll('.dot').data(data).enter().append('circle')
+     .attr('cx', d => x(d.avg_wage)).attr('cy', d => y(d.joviality))
+     .attr('r', 3).attr('fill', colors.scatter).attr('opacity', 0.5)
+     .on('mouseover', (ev, d) => showTip(`Wage: <strong>$${d.avg_wage.toLocaleString()}</strong><br>Happiness: <strong>${d.joviality.toFixed(3)}</strong>`, ev))
+     .on('mouseout', hideTip);
+    
+    // Regression line (simple linear)
+    const x1 = d3.min(data, d=>d.avg_wage), x2 = d3.max(data, d=>d.avg_wage);
+    const sumX = d3.sum(data, d=>d.avg_wage), sumY = d3.sum(data, d=>d.joviality);
+    const sumXY = d3.sum(data, d=>d.avg_wage * d.joviality), sumX2 = d3.sum(data, d=>d.avg_wage * d.avg_wage);
+    const n = data.length;
+    const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
+    const intercept = (sumY - slope * sumX) / n;
+    
+    g.append('line').attr('x1', x(x1)).attr('y1', y(slope*x1+intercept)).attr('x2', x(x2)).attr('y2', y(slope*x2+intercept))
+     .attr('stroke', '#333').attr('stroke-width', 2).attr('stroke-dasharray', '5,5');
+})();
 </script>
 </body></html>"""
+
+    return page.replace("__DATA__", _json.dumps(data))
+
 
     return page.replace("__DATA__", _json.dumps(data))
 
