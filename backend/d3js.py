@@ -2501,10 +2501,6 @@ body{font-family:Arial,sans-serif;background:#f4f5f7;color:#222;padding:16px}
 </head>
 <body>
 
-<div class="header">
-    <h2>City Pulse Executive Summary</h2>
-</div>
-
 <div class="kpi-grid">
   <div class="kpi-card"><div class="kpi-label">Total Resident Wages</div><div class="kpi-value" id="kv-wages">—</div></div>
   <div class="kpi-card"><div class="kpi-label">Total Resident Spending</div><div class="kpi-value" id="kv-spending">—</div></div>
@@ -2514,15 +2510,13 @@ body{font-family:Arial,sans-serif;background:#f4f5f7;color:#222;padding:16px}
   <div class="kpi-card"><div class="kpi-label">Active Wage Earners</div><div class="kpi-value" id="kv-earners">—</div></div>
 </div>
 
-<div class="details-bar" id="details-bar">Click any employer in the ranking, scatter, or map to see deep-dive metrics here.</div>
-
 <div class="chart-grid">
   <div class="chart-panel">
     <h3>Cost of Living Gap <span class="info-icon" onmouseover="showTip('<strong>Monthly city-wide totals</strong><br>Compares total wage income, cost of living expenses, and resulting net income.', event)" onmouseout="hideTip()">?</span></h3>
     <div id="ch-line"></div>
   </div>
   <div class="chart-panel">
-    <h3>Employer Health Ranking <span class="info-icon" onmouseover="showTip('<strong>Employer prosperity ranking</strong><br>Sorted by derived health score. Click a bar to highlight that employer across all charts.', event)" onmouseout="hideTip()">?</span></h3>
+    <h3>Employer Health Ranking <span class="info-icon" onmouseover="showTip('<strong>Employer prosperity ranking</strong><br>Sorted by derived health score. <br>Click a bar to highlight that employer across all charts.', event)" onmouseout="hideTip()">?</span></h3>
     <div class="ranking-wrap"><div id="ch-ranking"></div></div>
   </div>
   <div class="chart-panel">
@@ -2567,61 +2561,9 @@ function hideTip(){ tip.style('opacity',0); }
 
 function selectEmployer(id){
   selectedId = (selectedId === id) ? null : id;
-  updateDetails();
   drawRanking();
   drawScatter();
   drawMap();
-}
-
-function updateDetails(){
-  const bar = document.getElementById('details-bar');
-  if(!selectedId){ 
-    bar.style.justifyContent = 'center';
-    bar.innerHTML = '<span style="color:#aaa;font-style:italic">Click any employer in the ranking, scatter, or map to see deep-dive metrics here.</span>'; 
-    return; 
-  }
-  const e = DATA.employers.find(d=>d.id===selectedId);
-  if(!e) return;
-  
-  bar.style.justifyContent = 'space-around';
-  bar.innerHTML = `
-    <div class="detail-stat">
-      <span class="detail-label">Employer</span>
-      <span class="detail-value">#${e.id}</span>
-    </div>
-    <div class="detail-stat">
-      <span class="detail-label">Status</span>
-      <span class="detail-val-cat" style="background:${CAT_COLOR[e.category]}">${e.category}</span>
-    </div>
-    <div class="detail-stat">
-      <span class="detail-label">Health Score</span>
-      <span class="detail-value">${e.score.toFixed(3)}</span>
-    </div>
-    <div class="detail-stat">
-      <span class="detail-label">Jobs</span>
-      <span class="detail-value">${e.job_count}</span>
-    </div>
-    <div class="detail-stat">
-      <span class="detail-label">Avg Rate</span>
-      <span class="detail-value">$${e.avg_rate}/hr</span>
-    </div>
-    <div class="detail-stat">
-      <span class="detail-label">Turnover</span>
-      <span class="detail-value">${(e.turnover_rate*100).toFixed(1)}%</span>
-    </div>
-    <div class="detail-stat">
-      <span class="detail-label">Stable</span>
-      <span class="detail-value">${e.stable}</span>
-    </div>
-    <div class="detail-stat">
-      <span class="detail-label">Departed</span>
-      <span class="detail-value" style="color:#d62728">${e.departed}</span>
-    </div>
-    <div class="detail-stat">
-      <span class="detail-label">Arrived</span>
-      <span class="detail-value" style="color:#2ca02c">${e.arrived}</span>
-    </div>
-  `;
 }
 
 function scoreColor(s){ return d3.interpolateRdYlGn(s); }
@@ -2750,7 +2692,15 @@ function drawMap(){
 
   container.selectAll('path').data(buildings).join('path').attr('class','bld')
     .attr('d', d => 'M' + d.coords.map(c => proj(c[0], c[1]).join(',')).join('L') + 'Z')
-    .attr('fill', '#eee').attr('stroke', '#ccc').attr('stroke-width', 0.3);
+    .attr('fill', '#eee').attr('stroke', '#ccc').attr('stroke-width', 0.3)
+    .style('cursor', 'pointer')
+    .on('mouseover', (ev, d) => showTip(`<strong>Building ${d.id}</strong><br>${d.type}`, ev))
+    .on('mouseout', hideTip)
+    .on('click', (ev, d) => {
+        // Find if this building is an employer
+        const emp = DATA.symbols.find(s => s.x === d.coords[0][0] && s.y === d.coords[0][1]); // Rough match
+        if (emp) selectEmployer(emp.id);
+    });
 
   const syms = container.selectAll('circle.sym').data(symbols).join('circle').attr('class','sym')
     .attr('cx', d=>proj(d.x, d.y)[0]).attr('cy', d=>proj(d.x, d.y)[1])
@@ -2869,6 +2819,7 @@ body { margin: 0; font-family: Arial, sans-serif; background: #f4f5f7; color: #2
 .detail-val-cat { padding: 2px 8px; border-radius: 12px; color: #fff; font-size: 11px; font-weight: bold; }
 
 /* chart grid */
+
 .charts-top { display: grid; grid-template-columns: 3fr 2fr; gap: 14px; margin-bottom: 14px; }
 .charts-bottom { display: grid; grid-template-columns: 2fr 3fr; gap: 14px; }
 
@@ -2916,7 +2867,6 @@ body { margin: 0; font-family: Arial, sans-serif; background: #f4f5f7; color: #2
     <div class="cat-legend" id="cat-legend">
       <span style="font-size:11px;color:#666;margin-right:4px;">Filter:</span>
     </div>
-    <div class="details-bar" id="details-bar">Click any employer in any chart to see details here.</div>
   </div>
 
   <div class="charts-top">
@@ -2973,7 +2923,7 @@ body { margin: 0; font-family: Arial, sans-serif; background: #f4f5f7; color: #2
 
     <!-- ACTIVITY -->
     <div class="panel">
-      <h3>Workplace Activity<span class="info-icon" onmouseover="showTip('<strong>Monthly workplace check-ins</strong><br>Lines show city-wide employer activity. Highlights the selected employer.', event)" onmouseout="hideTip()">?</span></h3>
+      <h3>Workplace Activity<span class="info-icon" onmouseover="showTip('<strong>Monthly workplace check-ins</strong><br>Lines show city-wide employer activity. <br>Highlights the selected employer.', event)" onmouseout="hideTip()">?</span></h3>
       <svg id="activity-svg"></svg>
     </div>
   </div>
@@ -3003,7 +2953,6 @@ function hideTip() { tip.style('opacity', 0); }
 function selectEmployer(id) {
   selectedId = (selectedId === id) ? null : id;
   applySelection();
-  updateDetailsBar();
 }
 
 function applySelection() {
@@ -3033,66 +2982,6 @@ function applySelection() {
     .attr('stroke-width', d => d.id === selectedId ? 2.8 : 1)
     .attr('opacity', d => !isVis(d) ? 0 : selectedId == null ? 0.5 : d.id === selectedId ? 1 : 0.06);
   d3.selectAll('.act-line').filter(d => d.id === selectedId).raise();
-}
-
-function updateDetailsBar() {
-  const el = document.getElementById('details-bar');
-  if (selectedId == null) {
-    el.style.justifyContent = 'center';
-    el.innerHTML = '<span style="color:#aaa;font-style:italic">Click any employer in any chart to see deep-dive metrics here.</span>';
-    return;
-  }
-  const d = DATA.employers.find(e => e.id === selectedId);
-  if (!d) return;
-  
-  el.style.justifyContent = 'space-around';
-  const peak = DATA.months.length ? Math.max(...d.activity) : '—';
-  
-  el.innerHTML = `
-    <div class="detail-stat">
-      <span class="detail-label">Employer</span>
-      <span class="detail-value">#${d.id}</span>
-    </div>
-    <div class="detail-stat">
-      <span class="detail-label">Status</span>
-      <span class="detail-val-cat" style="background:${CAT_COLORS[d.category]}">${d.category}</span>
-    </div>
-    <div class="detail-stat">
-      <span class="detail-label">Health Score</span>
-      <span class="detail-value">${d.score.toFixed(3)}</span>
-    </div>
-    <div class="detail-stat">
-      <span class="detail-label">Jobs</span>
-      <span class="detail-value">${d.job_count}</span>
-    </div>
-    <div class="detail-stat">
-      <span class="detail-label">Avg Rate</span>
-      <span class="detail-value">$${d.avg_rate}/hr</span>
-    </div>
-    <div class="detail-stat">
-      <span class="detail-label">Turnover</span>
-      <span class="detail-value">${(d.turnover_rate*100).toFixed(1)}%</span>
-    </div>
-    <div class="detail-stat">
-      <span class="detail-label">Stable</span>
-      <span class="detail-value">${d.stable}</span>
-    </div>
-    <div class="detail-stat">
-      <span class="detail-label">Departed</span>
-      <span class="detail-value" style="color:#d62728">${d.departed}</span>
-    </div>
-    <div class="detail-stat">
-      <span class="detail-label">Arrived</span>
-      <span class="detail-value" style="color:#2ca02c">${d.arrived}</span>
-    </div>
-    <div class="detail-stat">
-      <span class="detail-label">Peak Activity</span>
-      <span class="detail-value">${peak}</span>
-    </div>
-    <div class="detail-stat" style="min-width:auto">
-      <button class="deselect-btn" onclick="selectEmployer(${d.id})" style="margin:0">&#10005;</button>
-    </div>
-  `;
 }
 
 // ── category legend ────────────────────────────────────────
@@ -3309,51 +3198,26 @@ def _render_resident_financial_html(data: dict) -> str:
 <meta charset="utf-8">
 <title>City Pulse Dashboard</title>
 <style>
+body { font-family: Arial, sans-serif; background: #f4f5f7; color: #222; padding: 16px; }
+.chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.chart-panel { background: #fff; border-radius: 10px; padding: 14px; box-shadow: 0 1px 5px rgba(0,0,0,.1); }
+.chart-panel h3 { font-size: 14px; margin-bottom: 8px; }
+.full { grid-column: 1 / -1; }
+.info-icon { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px;
+  background: #2f5d8c; color: #fff; border-radius: 50%; font-size: 9px; margin-left: 6px; cursor: help; }
+.legend { display: flex; gap: 10px; flex-wrap: wrap; font-size: 11px; margin-bottom: 8px; }
+.leg-item { display: flex; align-items: center; gap: 4px; cursor: pointer; }
+.leg-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.tooltip { position: fixed; background: rgba(20,20,20,.92); color: #fff; padding: 8px 12px;
+  border-radius: 6px; font-size: 12px; pointer-events: none; opacity: 0; z-index: 1000; }
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:Arial,sans-serif;background:#f4f5f7;color:#222;padding:16px}
 .header{margin-bottom:16px;text-align:left; background: #fff; padding: 16px 20px; border-radius: 10px; box-shadow: 0 1px 4px rgba(0,0,0,.1); transition: transform 0.2s, box-shadow 0.2s;}
 .header:hover{transform: translateY(-2px); box-shadow: 0 4px 15px rgba(0,0,0,.08);}
 .header h2{font-size:20px;color:#2f5d8c}
-
-.info-box { background: #fff; border-radius: 10px; padding: 12px 16px; box-shadow: 0 1px 5px rgba(0,0,0,.1);color:#aaa;
-  margin-bottom: 14px; min-height: 64px; display: flex; align-items: center; justify-content: center; gap: 20px; flex-wrap: wrap; transition: transform 0.2s, box-shadow 0.2s; }
-.info-box:hover { transform: translateY(-2px); box-shadow: 0 4px 15px rgba(0,0,0,.08); }
-.detail-stat { display: flex; flex-direction: column; align-items: center; min-width: 80px; }
-.detail-label { font-size: 10px; color: #777; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 5px; }
-.detail-value { font-size: 15px; font-weight: bold; color: #2f5d8c; }
-.detail-val-edu { padding: 2px 10px; border-radius: 12px; color: #fff; font-size: 11px; font-weight: bold; }
-.deselect-btn { font-size: 12px; padding: 4px 8px; cursor: pointer; border: 1px solid #ddd; border-radius: 4px; background: #fff; margin-left: 10px; }
-.deselect-btn:hover { background: #f5f5f5; }
-.info-icon{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;
-  background:#2f5d8c;color:#fff;border-radius:50%;font-size:9px;margin-left:6px;cursor:help;vertical-align:middle}
-.chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}
-.chart-panel{background:#fff;border-radius:10px;padding:14px;
-  box-shadow:0 1px 5px rgba(0,0,0,.1); transition: transform 0.2s, box-shadow 0.2s;}
-.chart-panel:hover{transform: translateY(-2px); box-shadow: 0 4px 15px rgba(0,0,0,.08);}
-.chart-panel.full{background:#fff;border-radius:10px;padding:14px;
-  box-shadow:0 1px 5px rgba(0,0,0,.1);margin-bottom:14px; transition: transform 0.2s, box-shadow 0.2s;}
-.chart-panel.full:hover{transform: translateY(-2px); box-shadow: 0 4px 15px rgba(0,0,0,.08);}
-.chart-panel h3{font-size:14px;margin-bottom:3px}
-.chart-note{font-size:11px;color:#777;margin-bottom:10px}
-.legend{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:8px;font-size:11px}
-.leg-item{display:flex;align-items:center;gap:4px;cursor:pointer}
-.leg-dot{width:10px;height:10px;border-radius:50%}
-.tooltip { position: fixed; background: rgba(20, 20, 20, 0.92); color: #fff; padding: 8px 12px;
-  border-radius: 6px; font-size: 12px; pointer-events: none; opacity: 0;
-  transition: opacity 0.12s; line-height: 1.6; z-index: 1000; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
-@media(max-width:800px){.chart-grid{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
-
-<div class="header">
-    <h2>Resident Vitality & Financial Well-being</h2>
-</div>
-
-<div class="info-box" id="info-box">
-  Click an education level in the <strong>Net Income by Group</strong> chart to highlight
-  matching participants in the <strong>Resident Financial Profiles</strong> below.
-</div>
 
 <div class="chart-grid">
   <div class="chart-panel">
@@ -3518,7 +3382,8 @@ function drawGroups(){
       .on('mouseout',hideTip)
       .on('click',(_,grp)=>{
         selectedGroup = (selectedGroup===grp)?null:grp;
-        updateGroupSelection();
+        drawGroups();
+        drawParallelCoords();
       });
   });
 
@@ -3527,7 +3392,8 @@ function drawGroups(){
     .selectAll('text').attr('transform','rotate(-20)').attr('text-anchor','end').attr('font-size',10)
     .style('cursor','pointer').on('click',(_,grp)=>{
       selectedGroup=(selectedGroup===grp)?null:grp;
-      updateGroupSelection();
+      drawGroups();
+      drawParallelCoords();
     });
   g.append('g').call(d3.axisLeft(y).ticks(5).tickFormat(d=>'$'+d3.format('.2s')(d)));
 
@@ -3541,48 +3407,6 @@ function drawGroups(){
     legEl.appendChild(item);
   });
   el.insertBefore(legEl, el.firstChild);
-}
-
-function updateGroupSelection(){
-  const box = document.getElementById('info-box');
-  if(!selectedGroup){
-    box.style.justifyContent = 'center';
-    box.innerHTML = '<span style="color:#aaa;font-style:italic">Click an education level in the <strong>Net Income by Group</strong> chart to deep-dive into demographic stats.</span>';
-    drawGroups();
-    drawParallelCoords();
-    return;
-  }
-  
-  const gIdx = DATA.groups.groups.indexOf(selectedGroup);
-  const wage = DATA.groups.series[0].values[gIdx];
-  const col  = DATA.groups.series[1].values[gIdx];
-  const net  = DATA.groups.series[2].values[gIdx];
-  
-  box.style.justifyContent = 'space-around';
-  box.innerHTML = `
-    <div class="detail-stat">
-      <span class="detail-label">Education Group</span>
-      <span class="detail-val-edu" style="background:${EDU_COLOR[selectedGroup]}">${selectedGroup}</span>
-    </div>
-    <div class="detail-stat">
-      <span class="detail-label">Avg Wage</span>
-      <span class="detail-value" style="color:#2ca02c">$${wage.toLocaleString()}</span>
-    </div>
-    <div class="detail-stat">
-      <span class="detail-label">Avg Expenses</span>
-      <span class="detail-value" style="color:#d62728">$${col.toLocaleString()}</span>
-    </div>
-    <div class="detail-stat">
-      <span class="detail-label">Avg Net Income</span>
-      <span class="detail-value" style="color:#1f77b4">$${net.toLocaleString()}</span>
-    </div>
-    <div class="detail-stat" style="min-width:auto">
-      <button class="deselect-btn" onclick="selectedGroup=null;updateGroupSelection()">&#10005;</button>
-    </div>
-  `;
-  
-  drawGroups();
-  drawParallelCoords();
 }
 
 // ── Parallel coordinates (linked) ────────────────────────────────────────
@@ -3643,7 +3467,8 @@ function drawParallelCoords(){
     item.innerHTML=`<span class="leg-dot" style="background:${col};width:10px;height:10px;border-radius:50%;display:inline-block"></span>${edu}`;
     item.addEventListener('click',()=>{
       selectedGroup=(selectedGroup===edu)?null:edu;
-      updateGroupSelection();
+      drawGroups();
+      drawParallelCoords();
     });
     legEl.appendChild(item);
   });
