@@ -6,19 +6,31 @@ function MapExplorerPage() {
   const [employers, setEmployers] = useState([]);
 
   useEffect(() => {
-    const data = localStorage.getItem('employers');
-    if (data) {
+    let data = localStorage.getItem('employers');
+    if (!data) {
+
+            fetch('http://localhost:5000/api/export/employer-health-csv')
+              .then(res => res.text())
+              .then(data => {
+                localStorage.setItem('employers', data);
+              })
+              .catch(error => {
+                console.error('Failed to fetch business health content:', error);
+              });
+              data = localStorage.getItem('employers');
+          }
       try {
         const parsed = JSON.parse(data);
         if (Array.isArray(parsed)) {
           setEmployers(parsed);
+          console.log('Employers loaded:', parsed);
         } else {
           setSelectedEmployer(parsed);
         }
       } catch (e) {
         console.error('Failed to parse employers data:', e);
       }
-    }
+        
   }, []);
 
   const handleEmployerSelect = (pointData) => {

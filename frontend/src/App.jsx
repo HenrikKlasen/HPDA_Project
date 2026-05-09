@@ -5,6 +5,7 @@ import BusinessHealthPage from './pages/BusinessHealthPage';
 import EmploymentTurnoverPage from './pages/EmploymentTurnoverPage';
 import EmploymentNetworkMapPage from './pages/EmploymentNetworkMapPage';
 import MapExplorerPage from './pages/MapExplorerPage';
+import EmployerDetailPage from './pages/EmployerDetailPage';
 import OverallViewPage from './pages/OverallViewPage';
 import ResidentFinancialHealthPage from './pages/ResidentFinancialHealthPage';
 
@@ -19,6 +20,7 @@ function App() {
         <Route path="/employment" element={<EmploymentTurnoverPage />} />
         <Route path="/network-map" element={<EmploymentNetworkMapPage />} />
         <Route path="/map" element={<MapExplorerPage />} />
+        <Route path="/employer/:id" element={<EmployerDetailPage />} />
         <Route path="*" element={<Navigate to="/about" replace />} />
       </Routes>
     </AppShell>

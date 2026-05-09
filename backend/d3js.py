@@ -2521,6 +2521,11 @@ document.getElementById('kv-earners').textContent   = K.active_earners;
 const CAT_COLOR = {Prosperous:'#2ca02c', Neutral:'#f59e0b', Struggling:'#d62728'};
 const tip = d3.select('#tip');
 let selectedId = null;
+// Keep a persistent zoom behavior and transform for the employer map so
+// redraws preserve the user's pan/zoom. `mapZoom` is the d3.zoom() behavior
+// and `mapTransform` stores the last transform applied.
+let mapZoom = null;
+let mapTransform = d3.zoomIdentity;
 
 function showTip(html, ev){
   tip.html(html).style('opacity',1)
@@ -2660,37 +2665,77 @@ function drawScatter(){
 
 // ── Symbol map (linked) ─────────────────────────────────────────────────
 function drawMap(){
-  const el = document.getElementById('ch-map');
-  d3.select(el).selectAll('*').remove();
-  const syms = DATA.symbols, blds = DATA.buildings;
-  const W = el.clientWidth||440, H = 480;
+	const el = document.getElementById('ch-map');
+	d3.select(el).selectAll('*').remove();
+	const syms = DATA.symbols, blds = DATA.buildings;
+	const W = el.clientWidth||440, H = 480;
 
-  const TYPE_COLOR = {Commercial:'#3b82f6', Residental:'#007850', School:'#f59e0b'};
+	const TYPE_COLOR = {Commercial:'#0f0f0f', Residental:'#0f0f0f', School:'#0f0f0f'};
 
-  const allX = [...blds.flatMap(b=>b.coords.map(c=>c[0])), ...syms.map(s=>s.x)];
-  const allY = [...blds.flatMap(b=>b.coords.map(c=>c[1])), ...syms.map(s=>s.y)];
-  const x = d3.scaleLinear().domain(d3.extent(allX)).range([8,W-8]);
-  const y = d3.scaleLinear().domain(d3.extent(allY)).range([H-8,8]);
-  const r = d3.scaleSqrt().domain([0,d3.max(syms,s=>s.job_count)]).range([3,12]);
+	const allX = [...blds.flatMap(b=>b.coords.map(c=>c[0])), ...syms.map(s=>s.x)];
+	const allY = [...blds.flatMap(b=>b.coords.map(c=>c[1])), ...syms.map(s=>s.y)];
+	const x = d3.scaleLinear().domain(d3.extent(allX)).range([8,W-8]);
+	const y = d3.scaleLinear().domain(d3.extent(allY)).range([H-8,8]);
+	// rPx maps job_count -> desired on-screen pixel radius (when zoom k===1)
+	const rPx = d3.scaleSqrt().domain([0,d3.max(syms,s=>s.job_count)]).range([3,12]);
 
-  const svg = d3.select(el).append('svg').attr('width',W).attr('height',H)
-    .style('border','1px solid #e5e7eb').style('border-radius','6px');
+	const svg = d3.select(el).append('svg').attr('width',W).attr('height',H)
+		.style('border','1px solid #e5e7eb').style('border-radius','6px');
 
-  svg.append('g').selectAll('path').data(blds).join('path')
-    .attr('d',b=>b.coords.map((c,i)=>(i?'L':'M')+x(c[0])+','+y(c[1])).join('')+'Z')
-    .attr('fill',b=>TYPE_COLOR[b.type]||'#aaa').attr('opacity',0.2)
-    .attr('stroke','#ccc').attr('stroke-width',0.3);
+	// container group that will be transformed by zoom/pan
+	const container = svg.append('g').attr('class','map-container');
 
-  svg.selectAll('circle').data(syms).join('circle')
-    .attr('cx',d=>x(d.x)).attr('cy',d=>y(d.y)).attr('r',d=>r(d.job_count))
-    .attr('fill',d=>CAT_COLOR[d.category])
-    .attr('opacity',d=>!selectedId||selectedId===d.id ? 0.85 : 0.18)
-    .attr('stroke',d=>selectedId===d.id?'#222':'#fff')
-    .attr('stroke-width',d=>selectedId===d.id?2:0.5)
-    .style('cursor','pointer')
-    .on('mouseover',(ev,d)=>showTip(`Employer ${d.id}<br>${d.category}<br>Jobs: ${d.job_count}<br>Rate: $${d.avg_rate}/hr`,ev))
-    .on('mouseout',hideTip)
-    .on('click',(_,d)=>selectEmployer(d.id));
+	// buildings layer (inside container so it pans/zooms)
+	container.append('g').selectAll('path').data(blds).join('path')
+		.attr('d',b=>b.coords.map((c,i)=>(i?'L':'M')+x(c[0])+','+y(c[1])).join('')+'Z')
+		.attr('fill',b=>TYPE_COLOR[b.type]||'#aaa').attr('opacity',0.2)
+		.attr('stroke','#ccc').attr('stroke-width',0.3);
+
+	// symbols layer
+	const symbols = container.append('g').attr('class','symbols');
+
+	symbols.selectAll('circle').data(syms).join('circle')
+		.attr('class','sym')
+		.attr('cx',d=>x(d.x)).attr('cy',d=>y(d.y))
+		// initial r for k === 1
+		.attr('r',d=>rPx(d.job_count))
+		.attr('fill',d=>CAT_COLOR[d.category])
+		.attr('opacity',d=>!selectedId||selectedId===d.id ? 0.85 : 0.18)
+		.attr('stroke',d=>selectedId===d.id?'#222':'#fff')
+		.attr('stroke-width',d=>selectedId===d.id?2:0.5)
+		.style('cursor','pointer')
+		.on('mouseover',(ev,d)=>showTip(`Employer ${d.id}<br>${d.category}<br>Jobs: ${d.job_count}<br>Rate: $${d.avg_rate}/hr`,ev))
+		.on('mouseout',hideTip)
+		.on('click',(_,d)=>selectEmployer(d.id));
+
+	// Setup zoom behavior for this map. We keep the zoom instance and last
+	// transform in outer-scope variables so redraws preserve the view.
+	mapZoom = d3.zoom()
+		.scaleExtent([0.5, 8])
+		.on('zoom', (event) => {
+			const t = event.transform;
+			container.attr('transform', t);
+			mapTransform = t;
+			const k = t.k || 1;
+			// adjust symbol radii and stroke widths to keep on-screen size constant
+			symbols.selectAll('circle.sym')
+				.attr('r', d => Math.max(1, rPx(d.job_count) / k))
+				.attr('stroke-width', d => (selectedId===d.id ? 2 : 0.5) / Math.max(k, 0.0001));
+			// thin building strokes visually as user zooms out/in
+			container.selectAll('path').attr('stroke-width', 0.3 / Math.max(k, 0.0001));
+		});
+
+	svg.call(mapZoom);
+	// restore previous transform if any
+	if(mapTransform && mapTransform.k && mapTransform.k !== 1){
+		svg.call(mapZoom.transform, mapTransform);
+		// also trigger a manual update of radii based on that transform
+		const k0 = mapTransform.k || 1;
+		symbols.selectAll('circle.sym')
+			.attr('r', d => Math.max(1, rPx(d.job_count) / k0))
+			.attr('stroke-width', d => (selectedId===d.id ? 2 : 0.5) / Math.max(k0, 0.0001));
+		container.selectAll('path').attr('stroke-width', 0.3 / Math.max(k0, 0.0001));
+	}
 }
 
 drawRanking();
@@ -2831,6 +2876,80 @@ def resident_financial_page():
 	}
 	html = _render_resident_financial_html(data)
 	return html, 200, {"Content-Type": "text/html; charset=utf-8"}
+
+
+@app.route('/api/employer_summary', methods=['GET'])
+def api_employer_summary():
+	"""Return precomputed employer summary JSON (if present).
+
+	This serves `backend/employer_health_summary.json` for the frontend to
+	enrich employer sidecards without requiring the full embedded HTML.
+	"""
+	try:
+		from pathlib import Path
+		import json
+		summary_path = Path(__file__).resolve().parent / 'employer_health_summary.json'
+		if not summary_path.exists():
+			return jsonify({'error': 'summary not available'}), 404
+		with open(summary_path, 'r', encoding='utf-8') as f:
+			data = json.load(f)
+		return jsonify(data)
+	except Exception as exc:
+		return jsonify({'error': str(exc)}), 500
+
+
+@app.route('/api/employers', methods=['GET'])
+def api_employers():
+	"""Return a lightweight list of employers for the frontend.
+
+	Prefer the precomputed `employer_health_summary.json` when present; if not,
+	query the database for basic fields (employerId, job count, avg rate).
+	"""
+	try:
+		from pathlib import Path
+		import json
+
+		summary_path = Path(__file__).resolve().parent / 'employer_health_summary.json'
+		if summary_path.exists():
+			with open(summary_path, 'r', encoding='utf-8') as f:
+				raw = json.load(f)
+			out = []
+			for e in raw:
+				eid = e.get('employerId')
+				out.append({
+					'id': eid,
+					'employerId': eid,
+					'name': e.get('name') or f"Employer {eid}",
+					'job_count': e.get('JobCount') or e.get('JobCount', 0),
+					'avg_rate': e.get('AverageHourlyRate') or e.get('avg_rate'),
+					'sector': e.get('Sector') or e.get('sector'),
+				})
+			return jsonify(out)
+
+		# fallback to DB
+		conn = _get_db_connection()
+		try:
+			rows = conn.execute(
+				"SELECT e.employerId AS employerId, COUNT(j.rowid) AS job_count, AVG(j.hourlyRate) AS avg_rate "
+				"FROM employers e LEFT JOIN jobs j ON e.employerId = j.employerId "
+				"GROUP BY e.employerId"
+			).fetchall()
+			out = []
+			for r in rows:
+				eid = int(r['employerId'])
+				out.append({
+					'id': eid,
+					'employerId': eid,
+					'name': f"Employer {eid}",
+					'job_count': int(r['job_count']) if r['job_count'] is not None else 0,
+					'avg_rate': float(r['avg_rate']) if r['avg_rate'] is not None else None,
+				})
+			return jsonify(out)
+		finally:
+			conn.close()
+
+	except Exception as exc:
+		return jsonify({'error': str(exc)}), 500
 
 
 def _render_resident_financial_html(data: dict) -> str:
@@ -3293,7 +3412,7 @@ def employment_page():
 
 @app.route("/api/job_transitions", methods=["GET"])
 def get_job_transitions():
-	"""Get job transitions data for interactive map visualization."""
+	"""Get job transitions data for sankey visualization."""
 	try:
 		import json
 		from pathlib import Path
@@ -3306,24 +3425,22 @@ def get_job_transitions():
 		with open(job_changes_path, 'r') as f:
 			job_changes = json.load(f)
 		
-		# Load map_points.csv to get employers with coordinates
-		map_points_path = Path(__file__).resolve().parent / "map_points.csv"
-		employer_coords = {}
-		if map_points_path.exists():
-			with open(map_points_path, 'r') as f:
-				lines = f.readlines()
-				for line in lines[1:]:  # Skip header
-					parts = line.strip().split(',')
-					if len(parts) >= 5:
-						emp_id = int(parts[0])
-						name = parts[1]
-						category = parts[2]
-						x = float(parts[3])
-						y = float(parts[4])
-						if category == "Employer":
-							employer_coords[emp_id] = {'name': name, 'x': x, 'y': y}
+		# Load employer data from database to get employer names
+		conn = _get_db_connection()
+		employer_df = pd.read_sql_query(
+			"""
+			SELECT DISTINCT employerId 
+			FROM jobs
+			ORDER BY employerId
+			""",
+			conn
+		)
+		conn.close()
 		
-		# Process job_changes.json to extract transitions only between employers in map
+		# Build employer ID to name mapping
+		employer_map = {int(row['employerId']): f"Employer {row['employerId']}" for _, row in employer_df.iterrows()}
+		
+		# Process job_changes.json to extract all transitions
 		links = []
 		all_employers = set()
 		
@@ -3331,15 +3448,13 @@ def get_job_transitions():
 			for transition in transitions:
 				source = int(transition['source'])
 				target = int(transition['target'])
-				# Only include if both endpoints are in the map
-				if source in employer_coords and target in employer_coords:
-					all_employers.add(source)
-					all_employers.add(target)
-					links.append({
-						'source': source,
-						'target': target,
-						'value': 1
-					})
+				all_employers.add(source)
+				all_employers.add(target)
+				links.append({
+					'source': source,
+					'target': target,
+					'value': 1
+				})
 		
 		# Aggregate links by source and target
 		link_dict = {}
@@ -3359,18 +3474,16 @@ def get_job_transitions():
 			employers_with_transitions.add(link['source'])
 			employers_with_transitions.add(link['target'])
 		
-		# Create nodes list with coordinates
+		# Create nodes list with only employers that have transitions
 		nodes = [
 			{
 				'id': emp_id,
-				'name': employer_coords[emp_id]['name'],
-				'x': employer_coords[emp_id]['x'],
-				'y': employer_coords[emp_id]['y']
+				'name': employer_map.get(emp_id, f"Employer {emp_id}")
 			}
 			for emp_id in sorted(employers_with_transitions)
 		]
 		
-		# Keep links with original employer IDs
+		# Keep links with original employer IDs (not indices)
 		links_with_ids = [
 			{'source': link['source'], 'target': link['target'], 'value': link['value']}
 			for link in aggregated_links
@@ -3713,14 +3826,13 @@ function highlightSmall(){
 				.force('center', d3.forceCenter(W / 2, H / 2).strength(0.1))
 				.force('collision', d3.forceCollide().radius(d => 50));
 
-			// Draw links (initially hidden)
+			// Draw links
 			const links = g.selectAll('line').data(data.links).join('line')
 				.attr('stroke', '#999')
-				.attr('stroke-opacity', 0)
+				.attr('stroke-opacity', 0.4)
 				.attr('stroke-width', d => Math.sqrt(d.value) * 1.5)
-				.attr('class', d => `link link-${d.source.id} link-${d.target.id}`)
 				.on('mouseover', (ev, d) => showTip(
-					`${data.nodes.find(n => n.id == d.source.id).name} ↔ ${data.nodes.find(n => n.id == d.target.id).name}<br>Transitions: ${d.value}`, ev))
+					`${data.nodes[d.source.index].name} ↔ ${data.nodes[d.target.index].name}<br>Transitions: ${d.value}`, ev))
 				.on('mouseout', hideTip);
 
 			// Draw nodes
@@ -3729,65 +3841,14 @@ function highlightSmall(){
 				.attr('fill', (d, i) => d3.schemeTableau10[i % 10])
 				.attr('stroke', '#fff')
 				.attr('stroke-width', 2)
-				.attr('class', d => `node node-${d.id}`)
-				.attr('cursor', 'pointer')
-				.on('mouseover', function(ev, d) {
+				.on('mouseover', (ev, d) => {
 					showTip(`${d.name}`, ev);
-					d3.select(this).attr('r', 25).attr('stroke-width', 3);
-					// Show connected links on hover
-					links.attr('stroke-opacity', l => (l.source.id === d.id || l.target.id === d.id) ? 0.6 : 0);
+					d3.select(ev.currentTarget).attr('r', 25).attr('stroke-width', 3);
 				})
-				.on('mouseout', function(ev, d) {
+				.on('mouseout', (ev, d) => {
 					hideTip();
-					d3.select(this).attr('r', 20).attr('stroke-width', 2);
-					// Hide links unless node is selected
-					const selectedNode = g.selectAll('circle.selected').data()[0];
-					links.attr('stroke-opacity', l => (selectedNode && (l.source.id === selectedNode.id || l.target.id === selectedNode.id)) ? 0.6 : 0);
-				})
-				.on('click', function(ev, d) {
-					ev.stopPropagation();
-					const isSelected = d3.select(this).classed('selected');
-					g.selectAll('circle').classed('selected', false).attr('stroke-width', 2);
-					
-					if(isSelected) {
-						// Deselect
-						links.attr('stroke-opacity', 0);
-					} else {
-						// Select this node
-						d3.select(this).classed('selected', true).attr('stroke-width', 3);
-						// Show its connections
-						links.attr('stroke-opacity', l => (l.source.id === d.id || l.target.id === d.id) ? 0.6 : 0);
-					}
+					d3.select(ev.currentTarget).attr('r', 20).attr('stroke-width', 2);
 				});
-
-			// Add brush selection
-			const brush = d3.brush()
-				.on('end', (event) => {
-					if(!event.selection) return;
-					const [[x0, y0], [x1, y1]] = event.selection;
-					const selectedNodes = data.nodes.filter(d => 
-						d.x >= x0 && d.x <= x1 && d.y >= y0 && d.y <= y1
-					);
-					
-					if(selectedNodes.length > 0) {
-						const selectedIds = new Set(selectedNodes.map(n => n.id));
-						g.selectAll('circle').classed('selected', false).attr('stroke-width', 2);
-						selectedNodes.forEach(n => {
-							g.select(`.node-${n.id}`).classed('selected', true).attr('stroke-width', 3);
-						});
-						// Show links between/to selected nodes
-						links.attr('stroke-opacity', l => (selectedIds.has(l.source.id) || selectedIds.has(l.target.id)) ? 0.6 : 0);
-					}
-					svg.call(brush.move, null); // Clear selection rectangle
-				});
-			
-			g.append('g').call(brush);
-
-			// Click elsewhere to deselect
-			svg.on('click', () => {
-				g.selectAll('circle').classed('selected', false).attr('stroke-width', 2);
-				links.attr('stroke-opacity', 0);
-			});
 
 			// Enable dragging
 			nodes.call(d3.drag()
