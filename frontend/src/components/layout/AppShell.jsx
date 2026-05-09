@@ -6,6 +6,7 @@ const tabs = [
   { to: '/business', label: 'Business Health' },
   { to: '/residents', label: 'Resident Financial Health' },
   { to: '/employment', label: 'Employment & Turnover' },
+  { to: '/network-map', label: 'Employment Network Map' },
   { to: '/map', label: 'Map Explorer' },
 ];
 
