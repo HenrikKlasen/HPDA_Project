@@ -4,7 +4,7 @@ function AboutPage() {
   return (
     <section>
       <div className="section-intro">
-        <h2>About this Dashboard</h2>
+        <h2>Dashboard User Guide & Project Overview</h2>
         <p>
           This dashboard was built to support the{" "}
           <strong>VAST Challenge 2022 — Challenge 3: Economic</strong> answer
@@ -104,28 +104,24 @@ function AboutPage() {
           >
             {[
               {
-                tab: "Overall View",
+                tab: "City Pulse (Overall)",
                 desc: "A high-level summary answering all three challenge questions at once. Shows KPI cards (total wages, spending, median net income, turnover rate, active employers and earners), a wages vs cost of living line chart, an employer health ranking, a business prosperity scatterplot, and a spatial employer map. Click any employer to highlight it across the ranking, scatter, and map.",
               },
               {
-                tab: "Business Health",
+                tab: "Enterprise Health",
                 desc: "Deep-dive into employer health. Shows a full dashboard with four linked charts: a prosperity/stability scatterplot, an employer health ranking, an employer size and wage distribution chart, and a workplace activity over time chart. Health score is derived from job count, average wage, stable workers, and turnover rate — it is an estimate, not an official measure. Click any employer to highlight it across all four charts.",
               },
               {
-                tab: "Resident Financial Health",
+                tab: "Resident Vitality",
                 desc: "Focuses on participant income and spending. Shows financial categories over time, wages vs cost of living, a net income distribution histogram, average income by education group, and a full-width parallel coordinates chart of individual participant financial profiles. Click an education level in the group chart to highlight matching participants in the parallel coordinates.",
               },
               {
-                tab: "Turnover",
-                desc: "Focuses on workforce participation trends. Shows a dual-axis line chart comparing the total number of active wage earners across the city against the average monthly wage per worker. Useful for identifying city-wide economic cycles and shifts in the labor market over time.",
+                tab: "Labor Dynamics",
+                desc: "Analyzes workforce trends and job mobility. Features a dual-view interface: a Statistical Trends view showing city-wide wages and participation, and a Job Mobility view featuring an interactive map of worker transfers between employers. Switch between views using the toggle in the dashboard header.",
               },
               {
-                tab: "Network",
-                desc: "An interactive force-directed graph showing the direct movement of workers between employers. Circles represent employers, and lines represent the flow of workers who changed jobs. Supports zoom, pan, and node dragging. Hover over nodes or links for detailed transition counts.",
-              },
-              {
-                tab: "Map Explorer",
-                desc: "An interactive spatial map of the city. Shows all building footprints (Commercial, Residential, School) and location dots for employers, restaurants, pubs, and schools. Supports zoom and pan. Use the toggle buttons to show or hide building types and location categories. Hover over any building or dot for details.",
+                tab: "Urban Map",
+                desc: "An interactive spatial map of the city. Shows all building footprints (Commercial, Residential, School) and location dots for employers, restaurants, pubs, and schools. Supports zoom and pan. Use the toggle buttons to show or hide building types and location categories.",
               },
             ].map(({ tab, desc }) => (
               <div

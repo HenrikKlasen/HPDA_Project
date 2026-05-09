@@ -2,25 +2,20 @@ import React, { useEffect, useState } from "react";
 import { NavLink, useNavigate, useLocation } from "react-router-dom";
 
 const tabs = [
-  { to: "/about", label: "About", shortcut: "1" },
-  { to: "/overall", label: "Overall", shortcut: "2" },
-  { to: "/business", label: "Businesses", shortcut: "3" },
+  { to: "/about", label: "Guide", shortcut: "1" },
+  { to: "/overall", label: "City Pulse", shortcut: "2" },
+  { to: "/business", label: "Enterprise Health", shortcut: "3" },
   {
     to: "/residents",
-    label: "Residents",
+    label: "Resident Vitality",
     shortcut: "4",
   },
   {
     to: "/employment",
-    label: "Turnover",
+    label: "Labor Dynamics",
     shortcut: "5",
   },
-  {
-    to: "/network-map",
-    label: "Network",
-    shortcut: "6",
-  },
-  { to: "/map", label: "Map", shortcut: "7" },
+  { to: "/map", label: "Urban Explorer", shortcut: "6" },
 ];
 
 function AppShell({ children }) {
