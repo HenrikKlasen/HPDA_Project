@@ -435,7 +435,7 @@ function BuildingsMap({
           role="group"
           aria-label="Building and location filters"
         >
-          <div style={{ marginBottom: "0.8rem" }}>
+          <div style={{ marginBottom: "0.8rem", marginRight: "2rem" }}>
             <p
               style={{
                 fontSize: "0.85rem",
@@ -446,21 +446,30 @@ function BuildingsMap({
             >
               Buildings
             </p>
-            {buildingTypes.map((type) => (
-              <button
-                key={type}
-                type="button"
-                className={`map-chip${enabledTypes[type] ? " active" : ""}`}
-                onClick={() => toggleType(type)}
-              >
-                <span
-                  className="map-chip-dot"
-                  style={{ background: typeColors[type] }}
-                />
-                {type} ({buildingCounts[type]})
-              </button>
-            ))}
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(2, 1fr)",
+                gap: "0.5rem",
+              }}
+            >
+              {buildingTypes.map((type) => (
+                <button
+                  key={type}
+                  type="button"
+                  className={`map-chip${enabledTypes[type] ? " active" : ""}`}
+                  onClick={() => toggleType(type)}
+                >
+                  <span
+                    className="map-chip-dot"
+                    style={{ background: typeColors[type] }}
+                  />
+                  {type} ({buildingCounts[type]})
+                </button>
+              ))}
+            </div>
           </div>
+          <br />
           <div>
             <p
               style={{
@@ -472,20 +481,28 @@ function BuildingsMap({
             >
               Locations
             </p>
-            {["Employer", "Restaurant", "Pub", "School"].map((category) => (
-              <button
-                key={category}
-                type="button"
-                className={`map-chip${enabledCategories[category] ? " active" : ""}`}
-                onClick={() => toggleCategory(category)}
-              >
-                <span
-                  className="map-chip-dot"
-                  style={{ background: CATEGORY_COLORS[category] }}
-                />
-                {category} ({pointCounts[category]})
-              </button>
-            ))}
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(2, 1fr)",
+                gap: "0.5rem",
+              }}
+            >
+              {["Employer", "Restaurant", "Pub", "School"].map((category) => (
+                <button
+                  key={category}
+                  type="button"
+                  className={`map-chip${enabledCategories[category] ? " active" : ""}`}
+                  onClick={() => toggleCategory(category)}
+                >
+                  <span
+                    className="map-chip-dot"
+                    style={{ background: CATEGORY_COLORS[category] }}
+                  />
+                  {category} ({pointCounts[category]})
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       )}
@@ -598,7 +615,11 @@ function BuildingsMap({
                 width={displayWidth}
                 height={displayHeight}
                 fill="transparent"
-                style={{ pointerEvents: "all" }}
+                style={{ pointerEvents: "all", cursor: "crosshair" }}
+                onClick={() => {
+                  setSelectedEmployerId(null);
+                  if (onEmployerSelect) onEmployerSelect(null);
+                }}
               />
               {/* <image href="/assets/basemap.png" x="0" y="0" width={displayWidth} height={displayHeight} style={{ pointerEvents: 'all' }} /> */}
 
@@ -864,6 +885,11 @@ function BuildingsMap({
                     onMouseLeave={() => {
                       if (isEnabled) setActiveBuilding(null);
                     }}
+                    onClick={() => {
+                      if (isEnabled && onEmployerSelect) {
+                        onEmployerSelect(building);
+                      }
+                    }}
                   />
                 );
               })}
@@ -923,9 +949,9 @@ function BuildingsMap({
                     onClick={() => {
                       if (point.category === "Employer") {
                         setSelectedEmployerId(point.id);
-                        if (onEmployerSelect) {
-                          onEmployerSelect(point);
-                        }
+                      }
+                      if (onEmployerSelect) {
+                        onEmployerSelect(point);
                       }
                     }}
                   />
@@ -996,17 +1022,7 @@ function BuildingsMap({
                     ({activePoint.x.toFixed(1)}, {activePoint.y.toFixed(1)})
                   </span>
                   {activePoint.category === "Employer" && (
-                    <div style={{ marginTop: "0.4rem" }}>
-                      <button
-                        type="button"
-                        className="map-chip active"
-                        onClick={() => navigate(`/employer/${activePoint.id}`)}
-                        title="Open employer details"
-                        style={{ pointerEvents: "auto" }}
-                      >
-                        View details
-                      </button>
-                    </div>
+                    <div style={{ marginTop: "0.4rem" }}></div>
                   )}
                 </>
               )}
