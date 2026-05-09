@@ -2609,6 +2609,12 @@ def overall_view_page():
             conn,
         )
         start_df, end_df = _get_job_transitions(conn)
+
+        # ── Sector breakdown ───────────────────────────────────────────────
+        sector_df = pd.read_sql_query(
+            "SELECT educationRequirement as sector, AVG(hourlyRate) as avg_rate, COUNT(*) as job_count FROM jobs GROUP BY sector",
+            conn,
+        )
     finally:
         conn.close()
 
@@ -2744,12 +2750,15 @@ def overall_view_page():
             if b.get("coords")
         ]
 
+    sector_data = sector_df.to_dict(orient="records") if not sector_df.empty else []
+
     data = {
         "kpis": kpis,
         "line": line_data,
         "employers": employers,
         "symbols": symbols,
         "buildings": buildings,
+        "sectors": sector_data,
     }
     html = _render_overall_view_html(data)
     return html, 200, {"Content-Type": "text/html; charset=utf-8"}
@@ -2815,9 +2824,16 @@ body{font-family:Arial,sans-serif;background:#f4f5f7;color:#222;padding:16px}
     <div id="ch-scatter"></div>
   </div>
   <div class="chart-panel">
-    <h3>Employer Map <span class="info-icon" onmouseover="showTip('<strong>Geographical distribution of employers</strong><br>Position: building location.<br>Size: job count.<br>Color: prosperity health category.', event)" onmouseout="hideTip()">?</span></h3>
+    <h3>Employer Map <span class="info-icon" onmouseover="showTip('<strong>Geographical distribution of employers.</strong><br>Position: building location.<br>Size: job count.<br>Color: prosperity health category.', event)" onmouseout="hideTip()">?</span></h3>
     <div id="ch-map"></div>
   </div>
+</div>
+
+<div class="chart-panel" style="margin-top:20px">
+    <h3>Education Requirement & Wage Breakdown <span class="info-icon" onmouseover="showTip('<strong>Sector Demographics</strong><br>Compares average hourly wages and job availability by education requirement level.', event)" onmouseout="hideTip()">?</span></h3>
+    <div id="ch-sectors" style="height:300px"></div>
+</div>
+
 </div>
 
 <div class="tooltip" id="tip"></div>
@@ -3087,6 +3103,55 @@ function drawMap(){
 		container.selectAll('path').attr('stroke-width', 0.3 / Math.max(k0, 0.0001));
 	}
 }
+
+// ── Sector Chart ────────────────────────────────────────────────────────
+(function drawSectors(){
+    const data = DATA.sectors;
+    if(!data || !data.length) return;
+    const el = document.getElementById('ch-sectors');
+    const W = el.clientWidth, H = 300;
+    const m = {top:20, right:60, bottom:40, left:60};
+    const w = W - m.left - m.right, h = H - m.top - m.bottom;
+
+    const svg = d3.select(el).append('svg').attr('width', W).attr('height', H);
+    const g = svg.append('g').attr('transform', `translate(${m.left},${m.top})`);
+
+    const x = d3.scaleBand().domain(data.map(d=>d.sector)).range([0, w]).padding(0.3);
+    const yL = d3.scaleLinear().domain([0, d3.max(data, d=>d.avg_rate)*1.1]).nice().range([h, 0]);
+    const yR = d3.scaleLinear().domain([0, d3.max(data, d=>d.job_count)*1.1]).nice().range([h, 0]);
+
+    g.append('g').attr('transform', `translate(0, ${h})`).call(d3.axisBottom(x));
+    g.append('g').call(d3.axisLeft(yL).ticks(5).tickFormat(d=>'$'+d));
+    g.append('g').attr('transform', `translate(${w}, 0)`).call(d3.axisRight(yR).ticks(5));
+
+    // Bars for job count
+    g.selectAll('.bar-jobs').data(data).enter().append('rect')
+     .attr('x', d => x(d.sector))
+     .attr('y', d => yR(d.job_count))
+     .attr('width', x.bandwidth() / 2)
+     .attr('height', d => h - yR(d.job_count))
+     .attr('fill', '#1f77b4').attr('opacity', 0.6)
+     .on('mouseover', (ev, d) => showTip(`<strong>${d.sector}</strong><br>Total Jobs: <strong>${d.job_count.toLocaleString()}</strong>`, ev))
+     .on('mouseout', hideTip);
+
+    // Bars for avg wage
+    g.selectAll('.bar-wage').data(data).enter().append('rect')
+     .attr('x', d => x(d.sector) + x.bandwidth() / 2)
+     .attr('y', d => yL(d.avg_rate))
+     .attr('width', x.bandwidth() / 2)
+     .attr('height', d => h - yL(d.avg_rate))
+     .attr('fill', '#2ca02c').attr('opacity', 0.6)
+     .on('mouseover', (ev, d) => showTip(`<strong>${d.sector}</strong><br>Avg Hourly Rate: <strong>$${d.avg_rate.toFixed(2)}/hr</strong>`, ev))
+     .on('mouseout', hideTip);
+
+    // Legend
+    const leg = svg.append('g').attr('transform', `translate(${W-150}, 5)`);
+    [['#1f77b4', 'Job Count'], ['#2ca02c', 'Avg Wage']].forEach(([c, n], i) => {
+        const li = leg.append('g').attr('transform', `translate(0, ${i*15})`);
+        li.append('rect').attr('width', 10).attr('height', 10).attr('fill', c);
+        li.append('text').attr('x', 14).attr('y', 9).attr('font-size', 10).text(n);
+    });
+})();
 
 drawRanking();
 drawScatter();
