@@ -255,6 +255,12 @@ function BuildingsMap({
     const zoom = d3
       .zoom()
       .scaleExtent([0.5, 8])
+      .filter((event) => {
+        // Disable scroll zoom (wheel without ctrl key)
+        if (event.type === "wheel" && !event.ctrlKey) return false;
+        // Default d3-zoom filter logic (allows primary mouse button, touch, etc.)
+        return !event.ctrlKey || event.type === "wheel";
+      })
       .on("zoom", (event) => {
         group.attr("transform", event.transform);
         setZoomLevel(event.transform.k);
@@ -417,7 +423,6 @@ function BuildingsMap({
   return (
     <article className="card map-card">
       <div className="map-header">
-        <h2 className="chart-title">Building Polygons & Locations Map</h2>
         <p className="map-subtitle">
           {filteredBuildings.length} of {buildings.length} buildings,{" "}
           {filteredPoints.length} of {points.length} points visible.

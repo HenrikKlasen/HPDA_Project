@@ -791,7 +791,8 @@ def _render_synced_joined_views_html(
 	body { font-family: Arial, sans-serif; margin: 12px; background: #fafafa; }
 	.header { margin-bottom: 12px; }
 	.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 12px; align-items: start; }
-	.card { background: white; border: 1px solid #ddd; border-radius: 10px; padding: 10px; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
+	.card { background: white; border: 1px solid #ddd; border-radius: 10px; padding: 10px; box-shadow: 0 1px 2px rgba(0,0,0,0.04); transition: transform 0.2s, box-shadow 0.2s; }
+	.card:hover { transform: translateY(-2px); box-shadow: 0 4px 15px rgba(0,0,0,.08); }
 	.card h3 { margin: 0 0 8px 0; font-size: 14px; }
 	.chart { width: 100%; overflow: hidden; }
 	.muted { opacity: 0.08; }
@@ -2030,9 +2031,16 @@ def _compute_employer_health_scores(conn: sqlite3.Connection) -> pd.DataFrame:
     return df
 
 
+_BUSINESS_CACHE = None
+
+
 @app.route("/api/business-health-page", methods=["GET"])
 def business_health_page():
-    """Combined Business Health dashboard: 4 linked charts in one page."""
+    """Combined Business Health dashboard: Optimized with caching."""
+    global _BUSINESS_CACHE
+    if _BUSINESS_CACHE:
+        return _BUSINESS_CACHE, 200, {"Content-Type": "text/html; charset=utf-8"}
+
     if not DB_PATH.exists():
         return jsonify({"error": f"Database not found: {DB_PATH}"}), 404
 
@@ -2078,7 +2086,7 @@ def business_health_page():
             "departed": int(row["departed"]),
             "arrived": int(row["arrived"]),
             "turnover_rate": round(float(row["turnover_rate"]), 3),
-            "score": float(row["health_score"]),
+            "score": round(float(row["health_score"]), 3),
             "category": _cat(float(row["health_score"])),
             "activity": [
                 act_map.get(int(row["employerId"]), {}).get(m, 0) for m in months_list
@@ -2087,10 +2095,735 @@ def business_health_page():
         for _, row in health_df.sort_values("health_score", ascending=False).iterrows()
     ]
 
-    html = _render_business_health_page_html(
-        {"employers": employers, "months": months_list}
-    )
+    data = {"employers": employers, "months": months_list}
+    html = _render_business_health_page_html(data)
+    _BUSINESS_CACHE = html
     return html, 200, {"Content-Type": "text/html; charset=utf-8"}
+
+
+_OVERALL_CACHE = None
+
+
+@app.route("/api/overall-view-page", methods=["GET"])
+def overall_view_page():
+    """Combined Overall View dashboard: Optimized with caching."""
+    global _OVERALL_CACHE
+    if _OVERALL_CACHE:
+        return _OVERALL_CACHE, 200, {"Content-Type": "text/html; charset=utf-8"}
+
+    if not DB_PATH.exists():
+        return jsonify({"error": f"Database not found: {DB_PATH}"}), 404
+
+    conn = _get_db_connection()
+    try:
+        health_df = _compute_employer_health_scores(conn)
+        fin_df = pd.read_sql_query(
+            """
+			SELECT strftime('%Y-%m', timestamp) AS month,
+			       SUM(CASE WHEN category = 'Wage' THEN amount ELSE 0 END) AS wage,
+			       SUM(CASE WHEN category IN ('Food','Shelter','Recreation','Education')
+			                THEN ABS(amount) ELSE 0 END) AS cost_of_living
+			FROM financialjournal
+			GROUP BY month ORDER BY month
+			""",
+            conn,
+        )
+        net_df = pd.read_sql_query(
+            """
+			SELECT participantId,
+			       SUM(CASE WHEN category='Wage' THEN amount ELSE 0 END) -
+			       SUM(CASE WHEN category IN ('Food','Shelter','Recreation','Education')
+			                THEN ABS(amount) ELSE 0 END) AS net_income
+			FROM financialjournal GROUP BY participantId
+			""",
+            conn,
+        )
+        earners_row = pd.read_sql_query(
+            "SELECT COUNT(DISTINCT participantId) AS n FROM financialjournal WHERE category='Wage'",
+            conn,
+        )
+        emp_df = pd.read_sql_query("SELECT employerId, location FROM employers", conn)
+        jobs_df = pd.read_sql_query(
+            "SELECT employerId, COUNT(*) AS job_count, AVG(hourlyRate) AS avg_rate FROM jobs GROUP BY employerId",
+            conn,
+        )
+        start_df, end_df = _get_job_transitions(conn)
+        sector_df = pd.read_sql_query(
+            "SELECT educationRequirement as sector, AVG(hourlyRate) as avg_rate, COUNT(*) as job_count FROM jobs GROUP BY sector",
+            conn,
+        )
+    finally:
+        conn.close()
+
+    total_wages = round(float(fin_df["wage"].sum()), 2) if not fin_df.empty else 0
+    total_spending = (
+        round(float(fin_df["cost_of_living"].sum()), 2) if not fin_df.empty else 0
+    )
+    median_net = (
+        round(float(net_df["net_income"].median()), 2) if not net_df.empty else 0
+    )
+    active_emp = int(health_df["employerId"].nunique()) if not health_df.empty else 0
+    avg_turnover = (
+        round(float(health_df["turnover_rate"].mean()) * 100, 1)
+        if not health_df.empty
+        else 0
+    )
+    active_earners = int(earners_row["n"].iloc[0]) if not earners_row.empty else 0
+
+    def _fmt(n):
+        if abs(n) >= 1_000_000:
+            return f"${n / 1_000_000:.1f}M"
+        if abs(n) >= 1_000:
+            return f"${n / 1_000:.0f}K"
+        return f"${n:.0f}"
+
+    kpis = {
+        "total_wages": _fmt(total_wages),
+        "total_spending": _fmt(total_spending),
+        "median_net": _fmt(median_net),
+        "turnover_rate": f"{avg_turnover}%",
+        "active_employers": str(active_emp),
+        "active_earners": str(active_earners),
+    }
+
+    if not fin_df.empty:
+        fin_df["net_income"] = fin_df["wage"] - fin_df["cost_of_living"]
+        line_data = {
+            "months": fin_df["month"].tolist(),
+            "series": [
+                {
+                    "name": "Wage",
+                    "values": [round(v, 2) for v in fin_df["wage"].tolist()],
+                    "color": "#2ca02c",
+                },
+                {
+                    "name": "Cost of Living",
+                    "values": [round(v, 2) for v in fin_df["cost_of_living"].tolist()],
+                    "color": "#d62728",
+                },
+                {
+                    "name": "Net Income",
+                    "values": [round(v, 2) for v in fin_df["net_income"].tolist()],
+                    "color": "#1f77b4",
+                },
+            ],
+        }
+    else:
+        line_data = {"months": [], "series": []}
+
+    def _cat(s):
+        return "Prosperous" if s >= 0.6 else "Neutral" if s >= 0.35 else "Struggling"
+
+    employers = []
+    if not health_df.empty:
+        employers = [
+            {
+                "id": int(row["employerId"]),
+                "avg_rate": round(float(row["avg_rate"]), 2),
+                "job_count": int(row["job_count"]),
+                "stable": int(row["stable"]),
+                "departed": int(row["departed"]),
+                "arrived": int(row["arrived"]),
+                "turnover_rate": round(float(row["turnover_rate"]), 3),
+                "score": round(float(row["health_score"]), 3),
+                "category": _cat(float(row["health_score"])),
+            }
+            for _, row in health_df.sort_values(
+                "health_score", ascending=False
+            ).iterrows()
+        ]
+
+    health_by_id = {e["id"]: e for e in employers}
+    emp_df = emp_df.merge(jobs_df, on="employerId", how="left").fillna(
+        {"job_count": 1, "avg_rate": 0}
+    )
+    turnover_map = {}
+    if not start_df.empty and not end_df.empty:
+        all_emp = set(start_df["employerId"].dropna().astype(int)) | set(
+            end_df["employerId"].dropna().astype(int)
+        )
+        for eid in all_emp:
+            s = set(start_df[start_df["employerId"] == eid]["participantId"])
+            e = set(end_df[end_df["employerId"] == eid]["participantId"])
+            turnover_map[int(eid)] = len(s.symmetric_difference(e))
+
+    symbols = []
+    for _, row in emp_df.iterrows():
+        px, py = _parse_wkt_point(str(row["location"]))
+        if px is None:
+            continue
+        eid = int(row["employerId"])
+        h = health_by_id.get(eid, {})
+        symbols.append(
+            {
+                "id": eid,
+                "x": px,
+                "y": py,
+                "job_count": int(row["job_count"]),
+                "avg_rate": round(float(row["avg_rate"]), 2),
+                "turnover": turnover_map.get(eid, 0),
+                "score": h.get("score", 0.5),
+                "category": h.get("category", "Neutral"),
+            }
+        )
+
+    buildings_path = Path(__file__).resolve().parent / "buildings.json"
+    buildings = []
+    if buildings_path.exists():
+        import json as _jj
+
+        raw = _jj.loads(buildings_path.read_text(encoding="utf-8"))
+        buildings = [
+            {"coords": b["coords"], "type": b.get("type", "")}
+            for b in raw
+            if b.get("coords")
+        ]
+
+    sector_data = sector_df.to_dict(orient="records") if not sector_df.empty else []
+
+    data = {
+        "kpis": kpis,
+        "line": line_data,
+        "employers": employers,
+        "symbols": symbols,
+        "buildings": buildings,
+        "sectors": sector_data,
+    }
+    html = _render_overall_view_html(data)
+    _OVERALL_CACHE = html
+    return html, 200, {"Content-Type": "text/html; charset=utf-8"}
+
+
+_RESIDENT_CACHE = None
+
+
+@app.route("/api/resident-financial-page", methods=["GET"])
+def resident_financial_page():
+    """Combined Resident Vitality dashboard: Optimized with caching."""
+    global _RESIDENT_CACHE
+    if _RESIDENT_CACHE:
+        return _RESIDENT_CACHE, 200, {"Content-Type": "text/html; charset=utf-8"}
+
+    if not DB_PATH.exists():
+        return jsonify({"error": f"Database not found: {DB_PATH}"}), 404
+
+    conn = _get_db_connection()
+    try:
+        cat_df = pd.read_sql_query(
+            "SELECT strftime('%Y-%m', timestamp) AS month, category, SUM(amount) AS total_amount FROM financialjournal GROUP BY month, category",
+            conn,
+        )
+        wc_df = pd.read_sql_query(
+            """SELECT strftime('%Y-%m', timestamp) AS month,
+                      SUM(CASE WHEN category='Wage' THEN amount ELSE 0 END) AS wage,
+                      SUM(CASE WHEN category IN ('Food','Shelter','Recreation','Education') THEN ABS(amount) ELSE 0 END) AS cost_of_living
+               FROM financialjournal GROUP BY month""",
+            conn,
+        )
+        ni_df = pd.read_sql_query(
+            """SELECT participantId,
+                      SUM(CASE WHEN category='Wage' THEN amount ELSE 0 END) AS total_wage,
+                      SUM(CASE WHEN category IN ('Food','Shelter','Recreation','Education') THEN ABS(amount) ELSE 0 END) AS total_expenses,
+                      SUM(amount) AS net_income
+               FROM financialjournal GROUP BY participantId""",
+            conn,
+        )
+        p_df = pd.read_sql_query(
+            "SELECT participantId, educationLevel, age, joviality, householdSize, interestGroup FROM participants",
+            conn,
+        )
+    finally:
+        conn.close()
+
+    # Data formatting logic...
+    if not cat_df.empty:
+        months_cat = sorted(cat_df["month"].dropna().unique().tolist())
+        cats = sorted(cat_df["category"].dropna().unique().tolist())
+        pivot = (
+            cat_df.pivot(index="month", columns="category", values="total_amount")
+            .reindex(months_cat)
+            .fillna(0)
+        )
+        cat_data = {
+            "months": months_cat,
+            "series": [
+                {"name": c, "values": [round(float(v), 2) for v in pivot[c].tolist()]}
+                for c in cats
+                if c in pivot.columns
+            ],
+        }
+    else:
+        cat_data = {"months": [], "series": []}
+
+    if not wc_df.empty:
+        wc_df["net_income"] = wc_df["wage"] - wc_df["cost_of_living"]
+        wc_data = {
+            "months": wc_df["month"].tolist(),
+            "series": [
+                {
+                    "name": "Wage",
+                    "values": [round(v, 2) for v in wc_df["wage"].tolist()],
+                    "color": "#2ca02c",
+                },
+                {
+                    "name": "Cost of Living",
+                    "values": [round(v, 2) for v in wc_df["cost_of_living"].tolist()],
+                    "color": "#d62728",
+                },
+                {
+                    "name": "Net Income",
+                    "values": [round(v, 2) for v in wc_df["net_income"].tolist()],
+                    "color": "#1f77b4",
+                },
+            ],
+        }
+    else:
+        wc_data = {"months": [], "series": []}
+
+    ni_records = [
+        {
+            "id": int(r["participantId"]),
+            "net": round(float(r["net_income"]), 2),
+            "wage": round(float(r["total_wage"]), 2),
+            "exp": round(float(r["total_expenses"]), 2),
+        }
+        for _, r in ni_df.iterrows()
+    ]
+    merged = ni_df.merge(p_df, on="participantId", how="inner")
+    group_df = (
+        merged.groupby("educationLevel")
+        .agg(
+            avg_wage=("total_wage", "mean"),
+            avg_exp=("total_expenses", "mean"),
+            avg_net=("net_income", "mean"),
+        )
+        .reset_index()
+    )
+    group_data = {
+        "groups": group_df["educationLevel"].tolist(),
+        "series": [
+            {
+                "name": "Avg Wage",
+                "values": [round(float(v), 2) for v in group_df["avg_wage"].tolist()],
+                "color": "#2ca02c",
+            },
+            {
+                "name": "Avg Expenses",
+                "values": [round(float(v), 2) for v in group_df["avg_exp"].tolist()],
+                "color": "#d62728",
+            },
+            {
+                "name": "Avg Net Income",
+                "values": [round(float(v), 2) for v in group_df["avg_net"].tolist()],
+                "color": "#1f77b4",
+            },
+        ],
+    }
+
+    axes = [
+        "total_wage",
+        "total_expenses",
+        "net_income",
+        "joviality",
+        "age",
+        "householdSize",
+    ]
+    pc_data = {
+        "records": [
+            {
+                "edu": r["educationLevel"],
+                "id": int(r["participantId"]),
+                **{k: round(float(r[k]), 2) for k in axes},
+            }
+            for _, r in merged.iterrows()
+            if all(pd.notna(r[k]) for k in axes)
+        ],
+        "axes": axes,
+        "axis_labels": {
+            "total_wage": "Total Wage ($)",
+            "total_expenses": "Total Expenses ($)",
+            "net_income": "Net Income ($)",
+            "joviality": "Joviality",
+            "age": "Age",
+            "householdSize": "Household Size",
+        },
+    }
+
+    data = {
+        "categories": cat_data,
+        "wages_cost": wc_data,
+        "net_income": ni_records,
+        "groups": group_data,
+        "parallel": pc_data,
+    }
+    html = _render_resident_financial_html(data)
+    _RESIDENT_CACHE = html
+    return html, 200, {"Content-Type": "text/html; charset=utf-8"}
+
+
+def _render_overall_view_html(data: dict) -> str:
+    import json as _json
+
+    page = r"""<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8">
+<title>City Pulse Dashboard</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:Arial,sans-serif;background:#f4f5f7;color:#222;padding:16px}
+.header{margin-bottom:16px;text-align:left; background: #fff; padding: 16px 20px; border-radius: 10px; box-shadow: 0 1px 4px rgba(0,0,0,.1); transition: transform 0.2s, box-shadow 0.2s;}
+.header:hover{transform: translateY(-2px); box-shadow: 0 4px 15px rgba(0,0,0,.08);}
+.header h2{font-size:20px;color:#2f5d8c}
+.kpi-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-bottom:16px}
+.kpi-card{background:#fff;border-radius:10px;padding:14px;box-shadow:0 1px 5px rgba(0,0,0,.1);transition:transform 0.2s,box-shadow 0.2s}
+.kpi-card:hover{transform:translateY(-3px);box-shadow:0 4px 15px rgba(0,0,0,.1)}
+.kpi-label{font-size:11px;color:#777;margin-bottom:6px}
+.kpi-value{font-size:18px;font-weight:bold}
+.details-bar{background:#fff;border-radius:10px;padding:12px 16px;box-shadow:0 1px 5px rgba(0,0,0,.1);color:#aaa;
+  margin-bottom:14px;min-height:64px;display:flex;align-items:center;justify-content:center;gap:20px;flex-wrap:wrap;transition:transform 0.2s,box-shadow 0.2s}
+.details-bar:hover{transform:translateY(-2px);box-shadow:0 4px 15px rgba(0,0,0,.08)}
+.detail-stat{display:flex;flex-direction:column;align-items:center;min-width:70px}
+.detail-label{font-size:10px;color:#777;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:5px}
+.detail-value{font-size:15px;font-weight:bold;color:#2f5d8c}
+.detail-val-cat{padding:2px 8px;border-radius:12px;color:#fff;font-size:11px;font-weight:bold}
+.chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.chart-panel{background:#fff;border-radius:10px;padding:14px;box-shadow:0 1px 5px rgba(0,0,0,.1);transition:transform 0.2s,box-shadow 0.2s}
+.chart-panel:hover{transform:translateY(-3px);box-shadow:0 4px 15px rgba(0,0,0,.1)}
+.chart-panel h3{font-size:14px;margin-bottom:3px}
+.info-icon{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;
+  background:#2f5d8c;color:#fff;border-radius:50%;font-size:9px;margin-left:6px;cursor:help;vertical-align:middle}
+.ranking-wrap{overflow-y:auto;max-height:320px}
+.tooltip { position: fixed; background: rgba(20, 20, 20, 0.92); color: #fff; padding: 8px 12px;
+  border-radius: 6px; font-size: 12px; pointer-events: none; opacity: 0;
+  transition: opacity 0.12s; line-height: 1.6; z-index: 1000; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+@media(max-width:800px){.kpi-grid{grid-template-columns:repeat(3,1fr)}.chart-grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<div class="header">
+    <h2>City Pulse Executive Summary</h2>
+</div>
+
+<div class="kpi-grid">
+  <div class="kpi-card"><div class="kpi-label">Total Resident Wages</div><div class="kpi-value" id="kv-wages">—</div></div>
+  <div class="kpi-card"><div class="kpi-label">Total Resident Spending</div><div class="kpi-value" id="kv-spending">—</div></div>
+  <div class="kpi-card"><div class="kpi-label">Median Net Income</div><div class="kpi-value" id="kv-net">—</div></div>
+  <div class="kpi-card"><div class="kpi-label">Avg Turnover Rate</div><div class="kpi-value" id="kv-turnover">—</div></div>
+  <div class="kpi-card"><div class="kpi-label">Active Employers</div><div class="kpi-value" id="kv-employers">—</div></div>
+  <div class="kpi-card"><div class="kpi-label">Active Wage Earners</div><div class="kpi-value" id="kv-earners">—</div></div>
+</div>
+
+<div class="details-bar" id="details-bar">Click any employer in the ranking, scatter, or map to see deep-dive metrics here.</div>
+
+<div class="chart-grid">
+  <div class="chart-panel">
+    <h3>Cost of Living Gap <span class="info-icon" onmouseover="showTip('<strong>Monthly city-wide totals</strong><br>Compares total wage income, cost of living expenses, and resulting net income.', event)" onmouseout="hideTip()">?</span></h3>
+    <div id="ch-line"></div>
+  </div>
+  <div class="chart-panel">
+    <h3>Employer Health Ranking <span class="info-icon" onmouseover="showTip('<strong>Employer prosperity ranking</strong><br>Sorted by derived health score. Click a bar to highlight that employer across all charts.', event)" onmouseout="hideTip()">?</span></h3>
+    <div class="ranking-wrap"><div id="ch-ranking"></div></div>
+  </div>
+  <div class="chart-panel">
+    <h3>Business Prosperity / Stability <span class="info-icon" onmouseover="showTip('<strong>Wages vs Jobs</strong><br>X-axis: Avg hourly rate.<br>Y-axis: Job count.<br>Dot size: number of stable workers.', event)" onmouseout="hideTip()">?</span></h3>
+    <div id="ch-scatter"></div>
+  </div>
+  <div class="chart-panel">
+    <h3>Employer Map <span class="info-icon" onmouseover="showTip('<strong>Geographical distribution of employers.</strong><br>Position: building location.<br>Size: job count.<br>Color: prosperity health category.', event)" onmouseout="hideTip()">?</span></h3>
+    <div id="ch-map"></div>
+  </div>
+</div>
+
+<div class="chart-panel" style="margin-top:20px">
+    <h3>Education Requirement & Wage Breakdown <span class="info-icon" onmouseover="showTip('<strong>Sector Demographics</strong><br>Compares average hourly wages and job availability by education requirement level.', event)" onmouseout="hideTip()">?</span></h3>
+    <div id="ch-sectors" style="height:300px"></div>
+</div>
+
+<div class="tooltip" id="tip"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+<script>
+const DATA = __DATA__;
+const K = DATA.kpis;
+document.getElementById('kv-wages').textContent     = K.total_wages;
+document.getElementById('kv-spending').textContent  = K.total_spending;
+document.getElementById('kv-net').textContent       = K.median_net;
+document.getElementById('kv-turnover').textContent  = K.turnover_rate;
+document.getElementById('kv-employers').textContent = K.active_employers;
+document.getElementById('kv-earners').textContent   = K.active_earners;
+
+const CAT_COLOR = {Prosperous:'#2ca02c', Neutral:'#f59e0b', Struggling:'#d62728'};
+const tip = d3.select('#tip');
+let selectedId = null;
+let mapZoom = null;
+let mapTransform = d3.zoomIdentity;
+
+function showTip(html, ev) {
+  tip.html(html).style('opacity', 1)
+     .style('left', (ev.clientX + 15) + 'px').style('top', (ev.clientY - 45) + 'px');
+}
+function hideTip(){ tip.style('opacity',0); }
+
+function selectEmployer(id){
+  selectedId = (selectedId === id) ? null : id;
+  updateDetails();
+  drawRanking();
+  drawScatter();
+  drawMap();
+}
+
+function updateDetails(){
+  const bar = document.getElementById('details-bar');
+  if(!selectedId){ 
+    bar.style.justifyContent = 'center';
+    bar.innerHTML = '<span style="color:#aaa;font-style:italic">Click any employer in the ranking, scatter, or map to see deep-dive metrics here.</span>'; 
+    return; 
+  }
+  const e = DATA.employers.find(d=>d.id===selectedId);
+  if(!e) return;
+  
+  bar.style.justifyContent = 'space-around';
+  bar.innerHTML = `
+    <div class="detail-stat">
+      <span class="detail-label">Employer</span>
+      <span class="detail-value">#${e.id}</span>
+    </div>
+    <div class="detail-stat">
+      <span class="detail-label">Status</span>
+      <span class="detail-val-cat" style="background:${CAT_COLOR[e.category]}">${e.category}</span>
+    </div>
+    <div class="detail-stat">
+      <span class="detail-label">Health Score</span>
+      <span class="detail-value">${e.score.toFixed(3)}</span>
+    </div>
+    <div class="detail-stat">
+      <span class="detail-label">Jobs</span>
+      <span class="detail-value">${e.job_count}</span>
+    </div>
+    <div class="detail-stat">
+      <span class="detail-label">Avg Rate</span>
+      <span class="detail-value">$${e.avg_rate}/hr</span>
+    </div>
+    <div class="detail-stat">
+      <span class="detail-label">Turnover</span>
+      <span class="detail-value">${(e.turnover_rate*100).toFixed(1)}%</span>
+    </div>
+    <div class="detail-stat">
+      <span class="detail-label">Stable</span>
+      <span class="detail-value">${e.stable}</span>
+    </div>
+    <div class="detail-stat">
+      <span class="detail-label">Departed</span>
+      <span class="detail-value" style="color:#d62728">${e.departed}</span>
+    </div>
+    <div class="detail-stat">
+      <span class="detail-label">Arrived</span>
+      <span class="detail-value" style="color:#2ca02c">${e.arrived}</span>
+    </div>
+  `;
+}
+
+function scoreColor(s){ return d3.interpolateRdYlGn(s); }
+
+// ── Cost line ───────────────────────────────────────────────────────────
+(function drawLine(){
+  const el = document.getElementById('ch-line');
+  const W = el.clientWidth||420, H = 260;
+  const m = {top:10, right:80, bottom:38, left:56};
+  const w = W-m.left-m.right, h = H-m.top-m.bottom;
+  const {months, series} = DATA.line;
+  if(!months.length) return;
+
+  const svg = d3.select(el).append('svg').attr('width',W).attr('height',H);
+  const g   = svg.append('g').attr('transform',`translate(${m.left},${m.top})`);
+  const x   = d3.scalePoint().domain(months).range([0,w]);
+  const allV= series.flatMap(s=>s.values);
+  const y   = d3.scaleLinear().domain([d3.min(allV), d3.max(allV)]).nice().range([h,0]);
+  const ln  = d3.line().x((_,i)=>x(months[i])).y(d=>y(d)).curve(d3.curveMonotoneX);
+
+  g.append('g').attr('transform',`translate(0,${h})`)
+    .call(d3.axisBottom(x).tickValues(months.filter((_,i)=>i%4===0)).tickSize(-h))
+    .call(ax=>{ax.selectAll('.tick line').attr('stroke','#eee');ax.select('.domain').remove();})
+    .selectAll('text').attr('transform','rotate(-30)').attr('text-anchor','end').attr('font-size',9);
+  g.append('g').call(d3.axisLeft(y).ticks(5).tickFormat(d=>'$'+d3.format('.2s')(d)));
+
+  series.forEach(s=>{
+    g.append('path').datum(s.values).attr('fill','none').attr('stroke',s.color).attr('stroke-width',2).attr('d',ln);
+    g.append('text').attr('x',x(months[months.length-1])+4).attr('y',y(s.values[s.values.length-1]))
+      .attr('fill',s.color).attr('font-size',9).attr('dominant-baseline','middle').text(s.name);
+  });
+})();
+
+// ── Health ranking ──────────────────────────────────────────────────────
+function drawRanking(){
+  const el = document.getElementById('ch-ranking');
+  d3.select(el).selectAll('*').remove();
+  const recs = DATA.employers.slice(0,50);
+  const barH = 15;
+  const margin = {top:5, right:40, bottom:20, left:50};
+  const W = el.clientWidth||420, H = recs.length*barH + margin.top + margin.bottom;
+  const w = W-margin.left-margin.right;
+
+  const svg = d3.select(el).append('svg').attr('width',W).attr('height',H);
+  const g   = svg.append('g').attr('transform',`translate(${margin.left},${margin.top})`);
+  const x   = d3.scaleLinear().domain([0,1]).range([0,w]);
+  const y   = d3.scaleBand().domain(recs.map(d=>d.id)).range([0,recs.length*barH]).padding(0.1);
+
+  g.selectAll('rect').data(recs).join('rect')
+    .attr('x',0).attr('y', d=>y(d.id)).attr('width', d=>x(d.score)).attr('height', y.bandwidth())
+    .attr('fill', d=>scoreColor(d.score)).attr('opacity', d=>!selectedId||selectedId===d.id?0.9:0.15)
+    .style('cursor','pointer').on('click', (_,d)=>selectEmployer(d.id))
+    .on('mouseover', (ev,d)=>showTip(`<strong>Employer ${d.id}</strong><br>Score: <strong>${d.score}</strong>`, ev))
+    .on('mouseout', hideTip);
+
+  g.append('g').call(d3.axisLeft(y).tickFormat(d=>'Emp '+d).tickSize(0)).call(ax=>ax.select('.domain').remove()).selectAll('text').attr('font-size',9);
+  g.append('g').attr('transform',`translate(0,${recs.length*barH})`).call(d3.axisBottom(x).ticks(5));
+}
+
+// ── Prosperity scatter ──────────────────────────────────────────────────
+function drawScatter(){
+  const el = document.getElementById('ch-scatter');
+  d3.select(el).selectAll('*').remove();
+  const recs = DATA.employers;
+  const W = el.clientWidth||420, H = 300;
+  const m = {top:15, right:15, bottom:40, left:45};
+  const w = W-m.left-m.right, h = H-m.top-m.bottom;
+
+  const svg = d3.select(el).append('svg').attr('width',W).attr('height',H);
+  const g   = svg.append('g').attr('transform',`translate(${m.left},${m.top})`);
+
+  const x = d3.scaleLinear().domain(d3.extent(recs, d=>d.avg_rate)).nice().range([0,w]);
+  const y = d3.scaleLinear().domain([0, d3.max(recs, d=>d.job_count)]).nice().range([h,0]);
+  const r = d3.scaleSqrt().domain([0, d3.max(recs, d=>d.stable)]).range([2,15]);
+
+  g.selectAll('circle').data(recs).join('circle')
+    .attr('cx', d=>x(d.avg_rate)).attr('cy', d=>y(d.job_count)).attr('r', d=>r(d.stable))
+    .attr('fill', d=>scoreColor(d.score)).attr('stroke', d=>selectedId===d.id?'#000':'#fff')
+    .attr('opacity', d=>!selectedId||selectedId===d.id?0.7:0.1)
+    .style('cursor','pointer').on('click', (_,d)=>selectEmployer(d.id))
+    .on('mouseover', (ev,d)=>showTip(`<strong>Employer ${d.id}</strong><br>Rate: <strong>$${d.avg_rate}/hr</strong><br>Jobs: <strong>${d.job_count}</strong>`, ev))
+    .on('mouseout', hideTip);
+
+  g.append('g').attr('transform',`translate(0,${h})`).call(d3.axisBottom(x).ticks(6));
+  g.append('g').call(d3.axisLeft(y).ticks(6));
+  g.append('text').attr('x',w/2).attr('y',h+34).attr('text-anchor','middle').attr('font-size',10).text('Avg Hourly Rate ($)');
+}
+
+// ── Employer map ────────────────────────────────────────────────────────
+function drawMap(){
+  const el = document.getElementById('ch-map');
+  d3.select(el).selectAll('*').remove();
+  const W = el.clientWidth||420, H = 400;
+  const {symbols, buildings} = DATA;
+
+  const svg = d3.select(el).append('svg').attr('width',W).attr('height',H).style('background','#f9f9f9').attr('class','map-svg');
+  const container = svg.append('g');
+
+  const xExt = d3.extent(symbols, d=>d.x);
+  const yExt = d3.extent(symbols, d=>d.y);
+  const scale = Math.min(W/(xExt[1]-xExt[0]), H/(yExt[1]-yExt[0])) * 0.9;
+  const tx = (W - (xExt[0]+xExt[1])*scale)/2;
+  const ty = (H - (yExt[0]+yExt[1])*scale)/2;
+
+  const proj = (px, py) => [px*scale + tx, py*scale + ty];
+  const rPx  = d3.scaleSqrt().domain([0, d3.max(symbols, d=>d.job_count)]).range([1,8]);
+
+  if(!mapZoom){
+    mapZoom = d3.zoom()
+      .scaleExtent([0.5, 20])
+      .filter(event => {
+        // Disable scroll zoom (wheel without ctrl key)
+        if (event.type === 'wheel' && !event.ctrlKey) return false;
+        return (!event.ctrlKey || event.type === 'wheel') && !event.button;
+      })
+      .on('zoom', (ev)=>{
+      mapTransform = ev.transform;
+      container.attr('transform', mapTransform);
+      const k = mapTransform.k;
+      container.selectAll('circle.sym').attr('r', d => Math.max(1, rPx(d.job_count)/k))
+               .attr('stroke-width', d => (selectedId===d.id?2:0.5)/k);
+      container.selectAll('path.bld').attr('stroke-width', 0.3/k);
+    });
+  }
+  svg.call(mapZoom);
+
+  container.selectAll('path').data(buildings).join('path').attr('class','bld')
+    .attr('d', d => 'M' + d.coords.map(c => proj(c[0], c[1]).join(',')).join('L') + 'Z')
+    .attr('fill', '#eee').attr('stroke', '#ccc').attr('stroke-width', 0.3);
+
+  const syms = container.selectAll('circle.sym').data(symbols).join('circle').attr('class','sym')
+    .attr('cx', d=>proj(d.x, d.y)[0]).attr('cy', d=>proj(d.x, d.y)[1])
+    .attr('r', d=>rPx(d.job_count)).attr('fill', d=>CAT_COLOR[d.category])
+    .attr('stroke', d=>selectedId===d.id?'#000':'#fff').attr('stroke-width', d=>selectedId===d.id?2:0.5)
+    .attr('opacity', d=>!selectedId||selectedId===d.id?1:0.2)
+    .style('cursor','pointer').on('click', (_,d)=>selectEmployer(d.id))
+    .on('mouseover', (ev,d)=>showTip(`<strong>Employer ${d.id}</strong><br>${d.category}`, ev))
+    .on('mouseout', hideTip);
+
+	if(mapTransform && mapTransform.k && mapTransform.k !== 1){
+		svg.call(mapZoom.transform, mapTransform);
+		const k0 = mapTransform.k || 1;
+		syms.attr('r', d => Math.max(1, rPx(d.job_count) / k0))
+			.attr('stroke-width', d => (selectedId===d.id ? 2 : 0.5) / Math.max(k0, 0.0001));
+		container.selectAll('path').attr('stroke-width', 0.3 / Math.max(k0, 0.0001));
+	}
+}
+
+// ── Sector Chart ────────────────────────────────────────────────────────
+(function drawSectors(){
+    const data = DATA.sectors;
+    if(!data || !data.length) return;
+    const el = document.getElementById('ch-sectors');
+    const W = el.clientWidth, H = 300;
+    const m = {top:20, right:60, bottom:40, left:60};
+    const w = W - m.left - m.right, h = H - m.top - m.bottom;
+
+    const svg = d3.select(el).append('svg').attr('width', W).attr('height', H);
+    const g = svg.append('g').attr('transform', `translate(${m.left},${m.top})`);
+
+    const x = d3.scaleBand().domain(data.map(d=>d.sector)).range([0, w]).padding(0.3);
+    const yL = d3.scaleLinear().domain([0, d3.max(data, d=>d.avg_rate)*1.1]).nice().range([h, 0]);
+    const yR = d3.scaleLinear().domain([0, d3.max(data, d=>d.job_count)*1.1]).nice().range([h, 0]);
+
+    g.append('g').attr('transform', `translate(0, ${h})`).call(d3.axisBottom(x));
+    g.append('g').call(d3.axisLeft(yL).ticks(5).tickFormat(d=>'$'+d));
+    g.append('g').attr('transform', `translate(${w}, 0)`).call(d3.axisRight(yR).ticks(5));
+
+    g.selectAll('.bar-jobs').data(data).enter().append('rect')
+     .attr('x', d => x(d.sector))
+     .attr('y', d => yR(d.job_count))
+     .attr('width', x.bandwidth() / 2)
+     .attr('height', d => h - yR(d.job_count))
+     .attr('fill', '#1f77b4').attr('opacity', 0.6)
+     .on('mouseover', (ev, d) => showTip(`<strong>${d.sector}</strong><br>Total Jobs: <strong>${d.job_count.toLocaleString()}</strong>`, ev))
+     .on('mouseout', hideTip);
+
+    g.selectAll('.bar-wage').data(data).enter().append('rect')
+     .attr('x', d => x(d.sector) + x.bandwidth() / 2)
+     .attr('y', d => yL(d.avg_rate))
+     .attr('width', x.bandwidth() / 2)
+     .attr('height', d => h - yL(d.avg_rate))
+     .attr('fill', '#2ca02c').attr('opacity', 0.6)
+     .on('mouseover', (ev, d) => showTip(`<strong>${d.sector}</strong><br>Avg Hourly Rate: <strong>$${d.avg_rate.toFixed(2)}/hr</strong>`, ev))
+     .on('mouseout', hideTip);
+
+    const leg = svg.append('g').attr('transform', `translate(${W-150}, 5)`);
+    [['#1f77b4', 'Job Count'], ['#2ca02c', 'Avg Wage']].forEach(([c, n], i) => {
+        const li = leg.append('g').attr('transform', `translate(0, ${i*15})`);
+        li.append('rect').attr('width', 10).attr('height', 10).attr('fill', c);
+        li.append('text').attr('x', 14).attr('y', 9).attr('font-size', 10).text(n);
+    });
+})();
+
+drawRanking();
+drawScatter();
+drawMap();
+updateDetails();
+</script>
+</body></html>"""
+
+    return page.replace("__DATA__", _json.dumps(data))
 
 
 def _render_business_health_page_html(data: dict) -> str:
@@ -2100,7 +2833,7 @@ def _render_business_health_page_html(data: dict) -> str:
 <html>
 <head>
 <meta charset="utf-8">
-<title>Business Health Dashboard</title>
+<title>Enterprise Health Dashboard</title>
 <style>
 * { box-sizing: border-box; }
 body { margin: 0; font-family: Arial, sans-serif; background: #f4f5f7; color: #222; }
@@ -2108,8 +2841,9 @@ body { margin: 0; font-family: Arial, sans-serif; background: #f4f5f7; color: #2
 
 /* header */
 .dash-header { background: #fff; border-radius: 10px; padding: 16px 20px; margin-bottom: 14px;
-  box-shadow: 0 1px 4px rgba(0,0,0,.1); }
-.dash-header h2 { margin: 0 0 4px; font-size: 18px; }
+  box-shadow: 0 1px 4px rgba(0,0,0,.1); transition: transform 0.2s, box-shadow 0.2s; }
+.dash-header:hover { transform: translateY(-2px); box-shadow: 0 4px 15px rgba(0,0,0,.08); }
+.dash-header h2 { margin: 0 0 4px; font-size: 18px; color: #2f5d8c; }
 .dash-sub { font-size: 12px; color: #888; margin: 0 0 8px; }
 .dash-note { font-size: 10px; color: #b00; background: #fff8f0; border: 1px solid #f5c6a0;
   border-radius: 4px; padding: 4px 8px; display: inline-block; margin-bottom: 10px; }
@@ -2127,7 +2861,8 @@ body { margin: 0; font-family: Arial, sans-serif; background: #f4f5f7; color: #2
 
 /* details bar */
 .details-bar { background: #fff; border-radius: 10px; padding: 12px 16px; box-shadow: 0 1px 5px rgba(0,0,0,.1);
-  margin-top: 14px; min-height: 64px; display: flex; align-items: center; justify-content: center; gap: 20px; flex-wrap: wrap; }
+  margin-top: 14px; min-height: 64px; display: flex; align-items: center; justify-content: center; gap: 20px; flex-wrap: wrap; transition: transform 0.2s, box-shadow 0.2s; }
+.details-bar:hover { transform: translateY(-2px); box-shadow: 0 4px 15px rgba(0,0,0,.08); }
 .detail-stat { display: flex; flex-direction: column; align-items: center; min-width: 70px; }
 .detail-label { font-size: 10px; color: #777; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 5px; }
 .detail-value { font-size: 15px; font-weight: bold; color: #2f5d8c; }
@@ -2138,7 +2873,8 @@ body { margin: 0; font-family: Arial, sans-serif; background: #f4f5f7; color: #2
 .charts-bottom { display: grid; grid-template-columns: 2fr 3fr; gap: 14px; }
 
 .panel { background: #fff; border-radius: 10px; padding: 14px 16px;
-  box-shadow: 0 1px 4px rgba(0,0,0,.1); overflow: hidden; }
+  box-shadow: 0 1px 4px rgba(0,0,0,.1); overflow: hidden; transition: transform 0.2s, box-shadow 0.2s; }
+.panel:hover { transform: translateY(-2px); box-shadow: 0 4px 15px rgba(0,0,0,.08); }
 .panel h3 { margin: 0 0 3px; font-size: 13px; color: #333; }
 .panel-sub { font-size: 10px; color: #aaa; margin: 0 0 8px; }
 
@@ -2174,7 +2910,7 @@ body { margin: 0; font-family: Arial, sans-serif; background: #f4f5f7; color: #2
 <div class="page">
 
   <div class="dash-header">
-    <h2>Business Health Dashboard</h2>
+    <h2>Enterprise Health Dashboard</h2>
     <p class="dash-sub">Focus: Which businesses appear prosperous or struggling?  Click any employer in any chart to highlight it across all views.</p>
     <div class="dash-note">&#9432; Health score is <strong>derived/estimated</strong>: 0.25×(jobs) + 0.25×(avg rate) + 0.25×(stable) &minus; 0.25×(turnover rate). Not an official economic measure.</div>
     <div class="cat-legend" id="cat-legend">
@@ -2565,881 +3301,23 @@ updateDetailsBar();
     return page.replace("__DATA__", _json.dumps(data))
 
 
-@app.route("/api/overall-view-page", methods=["GET"])
-def overall_view_page():
-    """Combined Overall View dashboard: KPIs + 4 linked charts in one page."""
-    if not DB_PATH.exists():
-        return jsonify({"error": f"Database not found: {DB_PATH}"}), 404
-
-    conn = _get_db_connection()
-    try:
-        health_df = _compute_employer_health_scores(conn)
-
-        fin_df = pd.read_sql_query(
-            """
-			SELECT strftime('%Y-%m', timestamp) AS month,
-			       SUM(CASE WHEN category = 'Wage' THEN amount ELSE 0 END) AS wage,
-			       SUM(CASE WHEN category IN ('Food','Shelter','Recreation','Education')
-			                THEN ABS(amount) ELSE 0 END) AS cost_of_living
-			FROM financialjournal
-			GROUP BY month ORDER BY month
-			""",
-            conn,
-        )
-
-        net_df = pd.read_sql_query(
-            """
-			SELECT participantId,
-			       SUM(CASE WHEN category='Wage' THEN amount ELSE 0 END) -
-			       SUM(CASE WHEN category IN ('Food','Shelter','Recreation','Education')
-			                THEN ABS(amount) ELSE 0 END) AS net_income
-			FROM financialjournal GROUP BY participantId
-			""",
-            conn,
-        )
-
-        earners_row = pd.read_sql_query(
-            "SELECT COUNT(DISTINCT participantId) AS n FROM financialjournal WHERE category='Wage'",
-            conn,
-        )
-
-        emp_df = pd.read_sql_query("SELECT employerId, location FROM employers", conn)
-        jobs_df = pd.read_sql_query(
-            "SELECT employerId, COUNT(*) AS job_count, AVG(hourlyRate) AS avg_rate FROM jobs GROUP BY employerId",
-            conn,
-        )
-        start_df, end_df = _get_job_transitions(conn)
-
-        # ── Sector breakdown ───────────────────────────────────────────────
-        sector_df = pd.read_sql_query(
-            "SELECT educationRequirement as sector, AVG(hourlyRate) as avg_rate, COUNT(*) as job_count FROM jobs GROUP BY sector",
-            conn,
-        )
-    finally:
-        conn.close()
-
-    # ── KPIs ──────────────────────────────────────────────────────────────
-    total_wages = round(float(fin_df["wage"].sum()), 2) if not fin_df.empty else 0
-    total_spending = (
-        round(float(fin_df["cost_of_living"].sum()), 2) if not fin_df.empty else 0
-    )
-    median_net = (
-        round(float(net_df["net_income"].median()), 2) if not net_df.empty else 0
-    )
-    active_emp = int(health_df["employerId"].nunique()) if not health_df.empty else 0
-    avg_turnover = (
-        round(float(health_df["turnover_rate"].mean()) * 100, 1)
-        if not health_df.empty
-        else 0
-    )
-    active_earners = int(earners_row["n"].iloc[0]) if not earners_row.empty else 0
-
-    def _fmt(n):
-        if abs(n) >= 1_000_000:
-            return f"${n / 1_000_000:.1f}M"
-        if abs(n) >= 1_000:
-            return f"${n / 1_000:.0f}K"
-        return f"${n:.0f}"
-
-    kpis = {
-        "total_wages": _fmt(total_wages),
-        "total_spending": _fmt(total_spending),
-        "median_net": _fmt(median_net),
-        "turnover_rate": f"{avg_turnover}%",
-        "active_employers": str(active_emp),
-        "active_earners": str(active_earners),
-    }
-
-    # ── Line chart data ────────────────────────────────────────────────────
-    if not fin_df.empty:
-        fin_df["net_income"] = fin_df["wage"] - fin_df["cost_of_living"]
-        line_data = {
-            "months": fin_df["month"].tolist(),
-            "series": [
-                {
-                    "name": "Wage",
-                    "values": [round(v, 2) for v in fin_df["wage"].tolist()],
-                    "color": "#2ca02c",
-                },
-                {
-                    "name": "Cost of Living",
-                    "values": [round(v, 2) for v in fin_df["cost_of_living"].tolist()],
-                    "color": "#d62728",
-                },
-                {
-                    "name": "Net Income",
-                    "values": [round(v, 2) for v in fin_df["net_income"].tolist()],
-                    "color": "#1f77b4",
-                },
-            ],
-        }
-    else:
-        line_data = {"months": [], "series": []}
-
-    # ── Employer data (scatter + ranking) ──────────────────────────────────
-    def _cat(s):
-        return "Prosperous" if s >= 0.6 else "Neutral" if s >= 0.35 else "Struggling"
-
-    employers = []
-    if not health_df.empty:
-        employers = [
-            {
-                "id": int(row["employerId"]),
-                "avg_rate": round(float(row["avg_rate"]), 2),
-                "job_count": int(row["job_count"]),
-                "stable": int(row["stable"]),
-                "departed": int(row["departed"]),
-                "arrived": int(row["arrived"]),
-                "turnover_rate": round(float(row["turnover_rate"]), 3),
-                "score": round(float(row["health_score"]), 3),
-                "category": _cat(float(row["health_score"])),
-            }
-            for _, row in health_df.sort_values(
-                "health_score", ascending=False
-            ).iterrows()
-        ]
-
-    # ── Symbol map data ────────────────────────────────────────────────────
-    health_by_id = {e["id"]: e for e in employers}
-    emp_df = emp_df.merge(jobs_df, on="employerId", how="left").fillna(
-        {"job_count": 1, "avg_rate": 0}
-    )
-
-    if not start_df.empty and not end_df.empty:
-        all_emp = set(start_df["employerId"].dropna().astype(int)) | set(
-            end_df["employerId"].dropna().astype(int)
-        )
-        turnover_map = {}
-        for eid in all_emp:
-            s = set(start_df[start_df["employerId"] == eid]["participantId"])
-            e = set(end_df[end_df["employerId"] == eid]["participantId"])
-            turnover_map[int(eid)] = len(s.symmetric_difference(e))
-    else:
-        turnover_map = {}
-
-    symbols = []
-    for _, row in emp_df.iterrows():
-        px, py = _parse_wkt_point(str(row["location"]))
-        if px is None:
-            continue
-        eid = int(row["employerId"])
-        h = health_by_id.get(eid, {})
-        symbols.append(
-            {
-                "id": eid,
-                "x": px,
-                "y": py,
-                "job_count": int(row["job_count"]),
-                "avg_rate": round(float(row["avg_rate"]), 2),
-                "turnover": turnover_map.get(eid, 0),
-                "score": h.get("score", 0.5),
-                "category": h.get("category", "Neutral"),
-            }
-        )
-
-    # ── Buildings for map background ───────────────────────────────────────
-    buildings_path = Path(__file__).resolve().parent / "buildings.json"
-    buildings = []
-    if buildings_path.exists():
-        import json as _jj
-
-        raw = _jj.loads(buildings_path.read_text(encoding="utf-8"))
-        buildings = [
-            {"coords": b["coords"], "type": b.get("type", "")}
-            for b in raw
-            if b.get("coords")
-        ]
-
-    sector_data = sector_df.to_dict(orient="records") if not sector_df.empty else []
-
-    data = {
-        "kpis": kpis,
-        "line": line_data,
-        "employers": employers,
-        "symbols": symbols,
-        "buildings": buildings,
-        "sectors": sector_data,
-    }
-    html = _render_overall_view_html(data)
-    return html, 200, {"Content-Type": "text/html; charset=utf-8"}
-
-
-def _render_overall_view_html(data: dict) -> str:
-    import json as _json
-
-    page = r"""<!DOCTYPE html>
-<html><head>
-<meta charset="utf-8">
-<title>Overall View</title>
-<style>
-*{box-sizing:border-box;margin:0;padding:0}
-body{font-family:Arial,sans-serif;background:#f4f5f7;color:#222;padding:16px}
-.kpi-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-bottom:16px}
-.kpi-card{background:#fff;border-radius:10px;padding:14px;box-shadow:0 1px 5px rgba(0,0,0,.1)}
-.kpi-label{font-size:11px;color:#777;margin-bottom:6px}
-.kpi-value{font-size:18px;font-weight:bold}
-.details-bar{background:#fff;border-radius:10px;padding:12px 16px;box-shadow:0 1px 5px rgba(0,0,0,.1);color:#aaa;
-  margin-bottom:14px;min-height:64px;display:flex;align-items:center;justify-content:center;gap:20px;flex-wrap:wrap}
-.detail-stat{display:flex;flex-direction:column;align-items:center;min-width:70px}
-.detail-label{font-size:10px;color:#777;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:5px}
-.detail-value{font-size:15px;font-weight:bold;color:#2f5d8c}
-.detail-val-cat{padding:2px 8px;border-radius:12px;color:#fff;font-size:11px;font-weight:bold}
-.chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-.chart-panel{background:#fff;border-radius:10px;padding:14px;box-shadow:0 1px 5px rgba(0,0,0,.1)}
-.chart-panel h3{font-size:14px;margin-bottom:3px}
-.chart-note{font-size:11px;color:#777;margin-bottom:10px}
-.info-icon{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;
-  background:#2f5d8c;color:#fff;border-radius:50%;font-size:9px;margin-left:6px;cursor:help;vertical-align:middle}
-.ranking-wrap{overflow-y:auto;max-height:320px}
-.tooltip { position: fixed; background: rgba(20, 20, 20, 0.92); color: #fff; padding: 8px 12px;
-  border-radius: 6px; font-size: 12px; pointer-events: none; opacity: 0;
-  transition: opacity 0.12s; line-height: 1.6; z-index: 1000; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
-@media(max-width:800px){.kpi-grid{grid-template-columns:repeat(3,1fr)}.chart-grid{grid-template-columns:1fr}}
-</style>
-</head>
-<body>
-
-<div class="kpi-grid">
-  <div class="kpi-card"><div class="kpi-label">Total Resident Wages</div><div class="kpi-value" id="kv-wages">—</div></div>
-  <div class="kpi-card"><div class="kpi-label">Total Resident Spending</div><div class="kpi-value" id="kv-spending">—</div></div>
-  <div class="kpi-card"><div class="kpi-label">Median Net Income</div><div class="kpi-value" id="kv-net">—</div></div>
-  <div class="kpi-card"><div class="kpi-label">Avg Turnover Rate</div><div class="kpi-value" id="kv-turnover">—</div></div>
-  <div class="kpi-card"><div class="kpi-label">Active Employers</div><div class="kpi-value" id="kv-employers">—</div></div>
-  <div class="kpi-card"><div class="kpi-label">Active Wage Earners</div><div class="kpi-value" id="kv-earners">—</div></div>
-</div>
-
-<div class="details-bar" id="details-bar">Click any employer in the ranking, scatter, or map to see details here.</div>
-
-<div class="chart-grid">
-  <div class="chart-panel">
-    <h3>Cost of Living Gap <span class="info-icon" onmouseover="showTip('<strong>Monthly city-wide totals</strong><br>Compares total wage income, cost of living expenses, and resulting net income.', event)" onmouseout="hideTip()">?</span></h3>
-    <div id="ch-line"></div>
-  </div>
-  <div class="chart-panel">
-    <h3>Employer Health Ranking <span class="info-icon" onmouseover="showTip('<strong>Employer prosperity ranking</strong><br>Sorted by derived health score.', event)" onmouseout="hideTip()">?</span></h3>
-    <div class="ranking-wrap"><div id="ch-ranking"></div></div>
-  </div>
-  <div class="chart-panel">
-    <h3>Business Prosperity / Stability <span class="info-icon" onmouseover="showTip('<strong>Wages vs Jobs</strong><br>X-axis: Avg hourly rate.<br>Y-axis: Job count.<br>Dot size: number of stable workers.', event)" onmouseout="hideTip()">?</span></h3>
-    <div id="ch-scatter"></div>
-  </div>
-  <div class="chart-panel">
-    <h3>Employer Map <span class="info-icon" onmouseover="showTip('<strong>Geographical distribution of employers.</strong><br>Position: building location.<br>Size: job count.<br>Color: prosperity health category.', event)" onmouseout="hideTip()">?</span></h3>
-    <div id="ch-map"></div>
-  </div>
-</div>
-
-<div class="chart-panel" style="margin-top:20px">
-    <h3>Education Requirement & Wage Breakdown <span class="info-icon" onmouseover="showTip('<strong>Sector Demographics</strong><br>Compares average hourly wages and job availability by education requirement level.', event)" onmouseout="hideTip()">?</span></h3>
-    <div id="ch-sectors" style="height:300px"></div>
-</div>
-
-</div>
-
-<div class="tooltip" id="tip"></div>
-
-<script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
-<script>
-const DATA = __DATA__;
-const K = DATA.kpis;
-document.getElementById('kv-wages').textContent     = K.total_wages;
-document.getElementById('kv-spending').textContent  = K.total_spending;
-document.getElementById('kv-net').textContent       = K.median_net;
-document.getElementById('kv-turnover').textContent  = K.turnover_rate;
-document.getElementById('kv-employers').textContent = K.active_employers;
-document.getElementById('kv-earners').textContent   = K.active_earners;
-
-const CAT_COLOR = {Prosperous:'#2ca02c', Neutral:'#f59e0b', Struggling:'#d62728'};
-const tip = d3.select('#tip');
-let selectedId = null;
-// Keep a persistent zoom behavior and transform for the employer map so
-// redraws preserve the user's pan/zoom. `mapZoom` is the d3.zoom() behavior
-// and `mapTransform` stores the last transform applied.
-let mapZoom = null;
-let mapTransform = d3.zoomIdentity;
-
-function showTip(html, ev) {
-  tip.html(html).style('opacity', 1)
-     .style('left', (ev.clientX + 15) + 'px').style('top', (ev.clientY - 45) + 'px');
-}
-function hideTip(){ tip.style('opacity',0); }
-
-function selectEmployer(id){
-  selectedId = (selectedId === id) ? null : id;
-  updateDetails();
-  drawRanking();
-  drawScatter();
-  drawMap();
-}
-
-function updateDetails(){
-  const bar = document.getElementById('details-bar');
-  if(!selectedId){ 
-    bar.style.justifyContent = 'center';
-    bar.innerHTML = '<span style="color:#aaa;font-style:italic">Click any employer in the ranking, scatter, or map to see deep-dive metrics here.</span>'; 
-    return; 
-  }
-  const e = DATA.employers.find(d=>d.id===selectedId);
-  if(!e) return;
-  
-  bar.style.justifyContent = 'space-around';
-  bar.innerHTML = `
-    <div class="detail-stat">
-      <span class="detail-label">Employer</span>
-      <span class="detail-value">#${e.id}</span>
-    </div>
-    <div class="detail-stat">
-      <span class="detail-label">Status</span>
-      <span class="detail-val-cat" style="background:${CAT_COLOR[e.category]}">${e.category}</span>
-    </div>
-    <div class="detail-stat">
-      <span class="detail-label">Health Score</span>
-      <span class="detail-value">${e.score.toFixed(3)}</span>
-    </div>
-    <div class="detail-stat">
-      <span class="detail-label">Jobs</span>
-      <span class="detail-value">${e.job_count}</span>
-    </div>
-    <div class="detail-stat">
-      <span class="detail-label">Avg Rate</span>
-      <span class="detail-value">$${e.avg_rate}/hr</span>
-    </div>
-    <div class="detail-stat">
-      <span class="detail-label">Turnover</span>
-      <span class="detail-value">${(e.turnover_rate*100).toFixed(1)}%</span>
-    </div>
-    <div class="detail-stat">
-      <span class="detail-label">Stable</span>
-      <span class="detail-value">${e.stable}</span>
-    </div>
-    <div class="detail-stat">
-      <span class="detail-label">Departed</span>
-      <span class="detail-value" style="color:#d62728">${e.departed}</span>
-    </div>
-    <div class="detail-stat">
-      <span class="detail-label">Arrived</span>
-      <span class="detail-value" style="color:#2ca02c">${e.arrived}</span>
-    </div>
-  `;
-}
-
-// ── Line chart (standalone — no employer selection) ─────────────────────
-(function drawLine(){
-  const {months, series} = DATA.line;
-  if(!months.length) return;
-  const el = document.getElementById('ch-line');
-  const W = el.clientWidth || 440, H = 270;
-  const m = {top:10,right:70,bottom:38,left:56};
-  const w = W-m.left-m.right, h = H-m.top-m.bottom;
-
-  const svg = d3.select(el).append('svg').attr('width',W).attr('height',H);
-  const g = svg.append('g').attr('transform',`translate(${m.left},${m.top})`);
-
-  const x = d3.scalePoint().domain(months).range([0,w]);
-  const allV = series.flatMap(s=>s.values);
-  const y = d3.scaleLinear().domain([d3.min(allV), d3.max(allV)]).nice().range([h,0]);
-
-  g.append('g').attr('transform',`translate(0,${h})`)
-    .call(d3.axisBottom(x).tickValues(months.filter((_,i)=>i%4===0)).tickSize(-h))
-    .call(ax=>ax.selectAll('.tick line').attr('stroke','#eee'))
-    .call(ax=>ax.select('.domain').remove())
-    .selectAll('text').attr('transform','rotate(-30)').attr('text-anchor','end').attr('font-size',9);
-
-  g.append('g').call(d3.axisLeft(y).ticks(5).tickFormat(d=>'$'+d3.format('.2s')(d)));
-
-  const line = d3.line().x((_,i)=>x(months[i])).y(d=>y(d)).curve(d3.curveMonotoneX);
-
-  series.forEach(s=>{
-    g.append('path').datum(s.values)
-      .attr('fill','none').attr('stroke',s.color).attr('stroke-width',2).attr('d',line);
-    const lx = x(months[months.length-1]);
-    const ly = y(s.values[s.values.length-1]);
-    g.append('text').attr('x',lx+4).attr('y',ly).attr('fill',s.color)
-      .attr('font-size',9).attr('dominant-baseline','middle').text(s.name);
-  });
-})();
-
-// ── Ranking (linked) ────────────────────────────────────────────────────
-function drawRanking(){
-  const el = document.getElementById('ch-ranking');
-  d3.select(el).selectAll('*').remove();
-  const emps = DATA.employers;
-  const W = (el.clientWidth||440), barH = 16;
-  const m = {top:4,right:50,bottom:20,left:60};
-  const H = emps.length*barH+m.top+m.bottom;
-  const w = W-m.left-m.right;
-
-  const svg = d3.select(el).append('svg').attr('width',W).attr('height',H);
-  const g = svg.append('g').attr('transform',`translate(${m.left},${m.top})`);
-
-  const x = d3.scaleLinear().domain([0,1]).range([0,w]);
-  const y = d3.scaleBand().domain(emps.map(d=>d.id)).range([0,emps.length*barH]).padding(0.12);
-
-  g.selectAll('rect').data(emps).join('rect')
-    .attr('x',0).attr('y',d=>y(d.id))
-    .attr('width',d=>x(d.score)).attr('height',y.bandwidth())
-    .attr('fill',d=>CAT_COLOR[d.category])
-    .attr('opacity',d=>!selectedId||selectedId===d.id ? 0.85 : 0.2)
-    .attr('stroke',d=>selectedId===d.id?'#222':'none').attr('stroke-width',1.5)
-    .style('cursor','pointer')
-    .on('mouseover',(ev,d)=>showTip(`<strong>Employer ${d.id}</strong><br>${d.category}<br>Score: <strong>${d.score}</strong><br>Jobs: <strong>${d.job_count}</strong>`,ev))
-    .on('mouseout',hideTip)
-    .on('click',(_,d)=>selectEmployer(d.id));
-
-  g.append('g').call(d3.axisLeft(y).tickFormat(d=>`Emp ${d}`).tickSize(0))
-    .call(ax=>{ax.select('.domain').remove(); ax.selectAll('text').attr('font-size',9);});
-  g.append('g').attr('transform',`translate(0,${emps.length*barH})`)
-    .call(d3.axisBottom(x).ticks(4).tickFormat(d3.format('.2f')));
-}
-
-// ── Scatter (linked) ────────────────────────────────────────────────────
-function drawScatter(){
-  const el = document.getElementById('ch-scatter');
-  d3.select(el).selectAll('*').remove();
-  const emps = DATA.employers;
-  const W = el.clientWidth||440, H = 480;
-  const m = {top:14,right:16,bottom:40,left:48};
-  const w = W-m.left-m.right, h = H-m.top-m.bottom;
-
-  const svg = d3.select(el).append('svg').attr('width',W).attr('height',H);
-  const g = svg.append('g').attr('transform',`translate(${m.left},${m.top})`);
-
-  const x = d3.scaleLinear().domain(d3.extent(emps,d=>d.avg_rate)).nice().range([0,w]);
-  const y = d3.scaleLinear().domain(d3.extent(emps,d=>d.job_count)).nice().range([h,0]);
-  const r = d3.scaleSqrt().domain([0,d3.max(emps,d=>d.stable)]).range([3,14]);
-
-  g.append('g').attr('transform',`translate(0,${h})`)
-    .call(d3.axisBottom(x).ticks(5).tickFormat(d=>'$'+d));
-  g.append('g').call(d3.axisLeft(y).ticks(5));
-
-  g.append('text').attr('x',w/2).attr('y',h+34).attr('text-anchor','middle')
-    .attr('font-size',11).text('Avg Hourly Rate ($)');
-  g.append('text').attr('transform','rotate(-90)').attr('x',-h/2).attr('y',-36)
-    .attr('text-anchor','middle').attr('font-size',11).text('Job Count');
-
-  g.selectAll('circle').data(emps).join('circle')
-    .attr('cx',d=>x(d.avg_rate)).attr('cy',d=>y(d.job_count)).attr('r',d=>r(d.stable))
-    .attr('fill',d=>CAT_COLOR[d.category])
-    .attr('opacity',d=>!selectedId||selectedId===d.id ? 0.78 : 0.12)
-    .attr('stroke',d=>selectedId===d.id?'#222':'#fff')
-    .attr('stroke-width',d=>selectedId===d.id?2:0.5)
-    .style('cursor','pointer')
-    .on('mouseover',(ev,d)=>showTip(`<strong>Employer ${d.id}</strong><br>${d.category}<br>Rate: <strong>$${d.avg_rate}/hr</strong><br>Jobs: <strong>${d.job_count}</strong><br>Stable: <strong>${d.stable}</strong>`,ev))
-    .on('mouseout',hideTip)
-    .on('click',(_,d)=>selectEmployer(d.id));
-}
-
-// ── Symbol map (linked) ─────────────────────────────────────────────────
-function drawMap(){
-	const el = document.getElementById('ch-map');
-	d3.select(el).selectAll('*').remove();
-	const syms = DATA.symbols, blds = DATA.buildings;
-	const W = el.clientWidth||440, H = 480;
-
-	const TYPE_COLOR = {Commercial:'#0f0f0f', Residental:'#0f0f0f', School:'#0f0f0f'};
-
-	const allX = [...blds.flatMap(b=>b.coords.map(c=>c[0])), ...syms.map(s=>s.x)];
-	const allY = [...blds.flatMap(b=>b.coords.map(c=>c[1])), ...syms.map(s=>s.y)];
-	const x = d3.scaleLinear().domain(d3.extent(allX)).range([8,W-8]);
-	const y = d3.scaleLinear().domain(d3.extent(allY)).range([H-8,8]);
-	// rPx maps job_count -> desired on-screen pixel radius (when zoom k===1)
-	const rPx = d3.scaleSqrt().domain([0,d3.max(syms,s=>s.job_count)]).range([3,12]);
-
-	const svg = d3.select(el).append('svg').attr('width',W).attr('height',H)
-		.style('border','1px solid #e5e7eb').style('border-radius','6px');
-
-	// container group that will be transformed by zoom/pan
-	const container = svg.append('g').attr('class','map-container');
-
-	// buildings layer (inside container so it pans/zooms)
-	container.append('g').selectAll('path').data(blds).join('path')
-		.attr('d',b=>b.coords.map((c,i)=>(i?'L':'M')+x(c[0])+','+y(c[1])).join('')+'Z')
-		.attr('fill',b=>TYPE_COLOR[b.type]||'#aaa').attr('opacity',0.2)
-		.attr('stroke','#ccc').attr('stroke-width',0.3);
-
-	// symbols layer
-	const symbols = container.append('g').attr('class','symbols');
-
-	symbols.selectAll('circle').data(syms).join('circle')
-		.attr('class','sym')
-		.attr('cx',d=>x(d.x)).attr('cy',d=>y(d.y))
-		// initial r for k === 1
-		.attr('r',d=>rPx(d.job_count))
-		.attr('fill',d=>CAT_COLOR[d.category])
-		.attr('opacity',d=>!selectedId||selectedId===d.id ? 0.85 : 0.18)
-		.attr('stroke',d=>selectedId===d.id?'#222':'#fff')
-		.attr('stroke-width',d=>selectedId===d.id?2:0.5)
-		.style('cursor','pointer')
-		.on('mouseover',(ev,d)=>showTip(`<strong>Employer ${d.id}</strong><br>${d.category}<br>Jobs: <strong>${d.job_count}</strong><br>Rate: <strong>$${d.avg_rate}/hr</strong>`,ev))
-		.on('mouseout',hideTip)
-		.on('click',(_,d)=>selectEmployer(d.id));
-
-	// Setup zoom behavior for this map. We keep the zoom instance and last
-	// transform in outer-scope variables so redraws preserve the view.
-	mapZoom = d3.zoom()
-		.scaleExtent([0.5, 8])
-		.on('zoom', (event) => {
-			const t = event.transform;
-			container.attr('transform', t);
-			mapTransform = t;
-			const k = t.k || 1;
-			// adjust symbol radii and stroke widths to keep on-screen size constant
-			symbols.selectAll('circle.sym')
-				.attr('r', d => Math.max(1, rPx(d.job_count) / k))
-				.attr('stroke-width', d => (selectedId===d.id ? 2 : 0.5) / Math.max(k, 0.0001));
-			// thin building strokes visually as user zooms out/in
-			container.selectAll('path').attr('stroke-width', 0.3 / Math.max(k, 0.0001));
-		});
-
-	svg.call(mapZoom);
-	// restore previous transform if any
-	if(mapTransform && mapTransform.k && mapTransform.k !== 1){
-		svg.call(mapZoom.transform, mapTransform);
-		// also trigger a manual update of radii based on that transform
-		const k0 = mapTransform.k || 1;
-		symbols.selectAll('circle.sym')
-			.attr('r', d => Math.max(1, rPx(d.job_count) / k0))
-			.attr('stroke-width', d => (selectedId===d.id ? 2 : 0.5) / Math.max(k0, 0.0001));
-		container.selectAll('path').attr('stroke-width', 0.3 / Math.max(k0, 0.0001));
-	}
-}
-
-// ── Sector Chart ────────────────────────────────────────────────────────
-(function drawSectors(){
-    const data = DATA.sectors;
-    if(!data || !data.length) return;
-    const el = document.getElementById('ch-sectors');
-    const W = el.clientWidth, H = 300;
-    const m = {top:20, right:60, bottom:40, left:60};
-    const w = W - m.left - m.right, h = H - m.top - m.bottom;
-
-    const svg = d3.select(el).append('svg').attr('width', W).attr('height', H);
-    const g = svg.append('g').attr('transform', `translate(${m.left},${m.top})`);
-
-    const x = d3.scaleBand().domain(data.map(d=>d.sector)).range([0, w]).padding(0.3);
-    const yL = d3.scaleLinear().domain([0, d3.max(data, d=>d.avg_rate)*1.1]).nice().range([h, 0]);
-    const yR = d3.scaleLinear().domain([0, d3.max(data, d=>d.job_count)*1.1]).nice().range([h, 0]);
-
-    g.append('g').attr('transform', `translate(0, ${h})`).call(d3.axisBottom(x));
-    g.append('g').call(d3.axisLeft(yL).ticks(5).tickFormat(d=>'$'+d));
-    g.append('g').attr('transform', `translate(${w}, 0)`).call(d3.axisRight(yR).ticks(5));
-
-    // Bars for job count
-    g.selectAll('.bar-jobs').data(data).enter().append('rect')
-     .attr('x', d => x(d.sector))
-     .attr('y', d => yR(d.job_count))
-     .attr('width', x.bandwidth() / 2)
-     .attr('height', d => h - yR(d.job_count))
-     .attr('fill', '#1f77b4').attr('opacity', 0.6)
-     .on('mouseover', (ev, d) => showTip(`<strong>${d.sector}</strong><br>Total Jobs: <strong>${d.job_count.toLocaleString()}</strong>`, ev))
-     .on('mouseout', hideTip);
-
-    // Bars for avg wage
-    g.selectAll('.bar-wage').data(data).enter().append('rect')
-     .attr('x', d => x(d.sector) + x.bandwidth() / 2)
-     .attr('y', d => yL(d.avg_rate))
-     .attr('width', x.bandwidth() / 2)
-     .attr('height', d => h - yL(d.avg_rate))
-     .attr('fill', '#2ca02c').attr('opacity', 0.6)
-     .on('mouseover', (ev, d) => showTip(`<strong>${d.sector}</strong><br>Avg Hourly Rate: <strong>$${d.avg_rate.toFixed(2)}/hr</strong>`, ev))
-     .on('mouseout', hideTip);
-
-    // Legend
-    const leg = svg.append('g').attr('transform', `translate(${W-150}, 5)`);
-    [['#1f77b4', 'Job Count'], ['#2ca02c', 'Avg Wage']].forEach(([c, n], i) => {
-        const li = leg.append('g').attr('transform', `translate(0, ${i*15})`);
-        li.append('rect').attr('width', 10).attr('height', 10).attr('fill', c);
-        li.append('text').attr('x', 14).attr('y', 9).attr('font-size', 10).text(n);
-    });
-})();
-
-drawRanking();
-drawScatter();
-drawMap();
-</script>
-</body></html>"""
-
-    return page.replace("__DATA__", _json.dumps(data))
-
-
-@app.route("/api/resident-financial-page", methods=["GET"])
-def resident_financial_page():
-    """Combined Resident Financial Health dashboard: 5 charts in one page."""
-    if not DB_PATH.exists():
-        return jsonify({"error": f"Database not found: {DB_PATH}"}), 404
-
-    conn = _get_db_connection()
-    try:
-        cat_df = pd.read_sql_query(
-            """SELECT strftime('%Y-%m', timestamp) AS month, category,
-			          SUM(amount) AS total_amount
-			   FROM financialjournal
-			   GROUP BY month, category ORDER BY month, category""",
-            conn,
-        )
-        wc_df = pd.read_sql_query(
-            """SELECT strftime('%Y-%m', timestamp) AS month,
-			          SUM(CASE WHEN category='Wage' THEN amount ELSE 0 END) AS wage,
-			          SUM(CASE WHEN category IN ('Food','Shelter','Recreation','Education')
-			                   THEN ABS(amount) ELSE 0 END) AS cost_of_living
-			   FROM financialjournal GROUP BY month ORDER BY month""",
-            conn,
-        )
-        ni_df = pd.read_sql_query(
-            """SELECT participantId,
-			          SUM(CASE WHEN category='Wage' THEN amount ELSE 0 END) AS total_wage,
-			          SUM(CASE WHEN category IN ('Food','Shelter','Recreation','Education')
-			                   THEN ABS(amount) ELSE 0 END) AS total_expenses,
-			          SUM(amount) AS net_income
-			   FROM financialjournal GROUP BY participantId""",
-            conn,
-        )
-        p_df = pd.read_sql_query(
-            "SELECT participantId, educationLevel, age, joviality, householdSize, interestGroup FROM participants",
-            conn,
-        )
-    finally:
-        conn.close()
-
-    # ── Financial categories line ──────────────────────────────────────────
-    if not cat_df.empty:
-        months_cat = sorted(cat_df["month"].dropna().unique().tolist())
-        cats = sorted(cat_df["category"].dropna().unique().tolist())
-        pivot = (
-            cat_df.pivot(index="month", columns="category", values="total_amount")
-            .reindex(months_cat)
-            .fillna(0)
-        )
-        cat_data = {
-            "months": months_cat,
-            "series": [
-                {"name": c, "values": [round(float(v), 2) for v in pivot[c].tolist()]}
-                for c in cats
-                if c in pivot.columns
-            ],
-        }
-    else:
-        cat_data = {"months": [], "series": []}
-
-    # ── Wages vs cost line ─────────────────────────────────────────────────
-    if not wc_df.empty:
-        wc_df["net_income"] = wc_df["wage"] - wc_df["cost_of_living"]
-        wc_data = {
-            "months": wc_df["month"].tolist(),
-            "series": [
-                {
-                    "name": "Wage",
-                    "values": [round(v, 2) for v in wc_df["wage"].tolist()],
-                    "color": "#2ca02c",
-                },
-                {
-                    "name": "Cost of Living",
-                    "values": [round(v, 2) for v in wc_df["cost_of_living"].tolist()],
-                    "color": "#d62728",
-                },
-                {
-                    "name": "Net Income",
-                    "values": [round(v, 2) for v in wc_df["net_income"].tolist()],
-                    "color": "#1f77b4",
-                },
-            ],
-        }
-    else:
-        wc_data = {"months": [], "series": []}
-
-    # ── Per-participant net income ─────────────────────────────────────────
-    ni_records = (
-        [
-            {
-                "id": int(r["participantId"]),
-                "net": round(float(r["net_income"]), 2),
-                "wage": round(float(r["total_wage"]), 2),
-                "exp": round(float(r["total_expenses"]), 2),
-            }
-            for _, r in ni_df.iterrows()
-        ]
-        if not ni_df.empty
-        else []
-    )
-
-    # ── Group comparison + parallel coords ────────────────────────────────
-    group_data = {"groups": [], "series": []}
-    pc_data = {"records": [], "axes": [], "axis_labels": {}}
-
-    if not p_df.empty and not ni_df.empty:
-        p_df["participantId"] = pd.to_numeric(p_df["participantId"], errors="coerce")
-        ni_df["participantId"] = pd.to_numeric(ni_df["participantId"], errors="coerce")
-        merged = p_df.merge(ni_df, on="participantId", how="inner")
-
-        ORDER = {"Low": 0, "HighSchoolOrCollege": 1, "Bachelors": 2, "Graduate": 3}
-        grp = (
-            merged.groupby("educationLevel")
-            .agg(
-                avg_wage=("total_wage", "mean"),
-                avg_exp=("total_expenses", "mean"),
-                avg_net=("net_income", "mean"),
-            )
-            .reset_index()
-        )
-        grp["_k"] = grp["educationLevel"].map(ORDER).fillna(99)
-        grp = grp.sort_values("_k")
-
-        group_data = {
-            "groups": grp["educationLevel"].tolist(),
-            "series": [
-                {
-                    "name": "Total Wage",
-                    "values": [round(float(v), 0) for v in grp["avg_wage"].tolist()],
-                    "color": "#2ca02c",
-                },
-                {
-                    "name": "Total Expenses",
-                    "values": [round(float(v), 0) for v in grp["avg_exp"].tolist()],
-                    "color": "#d62728",
-                },
-                {
-                    "name": "Net Income",
-                    "values": [round(float(v), 0) for v in grp["avg_net"].tolist()],
-                    "color": "#1f77b4",
-                },
-            ],
-        }
-
-        axes = [
-            "total_wage",
-            "total_expenses",
-            "net_income",
-            "joviality",
-            "age",
-            "householdSize",
-        ]
-        pc_data = {
-            "records": [
-                {
-                    "edu": r["educationLevel"],
-                    "ig": r["interestGroup"],
-                    **{k: round(float(r[k]), 2) for k in axes if pd.notna(r[k])},
-                }
-                for _, r in merged.iterrows()
-                if all(pd.notna(r[k]) for k in axes)
-            ],
-            "axes": axes,
-            "axis_labels": {
-                "total_wage": "Total Wage ($)",
-                "total_expenses": "Total Expenses ($)",
-                "net_income": "Net Income ($)",
-                "joviality": "Joviality",
-                "age": "Age",
-                "householdSize": "Household Size",
-            },
-        }
-
-    data = {
-        "categories": cat_data,
-        "wages_cost": wc_data,
-        "net_income": ni_records,
-        "groups": group_data,
-        "parallel": pc_data,
-    }
-    html = _render_resident_financial_html(data)
-    return html, 200, {"Content-Type": "text/html; charset=utf-8"}
-
-
-@app.route("/api/employer_summary", methods=["GET"])
-def api_employer_summary():
-    """Return precomputed employer summary JSON (if present).
-
-    This serves `backend/employer_health_summary.json` for the frontend to
-    enrich employer sidecards without requiring the full embedded HTML.
-    """
-    try:
-        import json
-        from pathlib import Path
-
-        summary_path = Path(__file__).resolve().parent / "employer_health_summary.json"
-        if not summary_path.exists():
-            return jsonify({"error": "summary not available"}), 404
-        with open(summary_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return jsonify(data)
-    except Exception as exc:
-        return jsonify({"error": str(exc)}), 500
-
-
-@app.route("/api/employers", methods=["GET"])
-def api_employers():
-    """Return a lightweight list of employers for the frontend.
-
-    Prefer the precomputed `employer_health_summary.json` when present; if not,
-    query the database for basic fields (employerId, job count, avg rate).
-    """
-    try:
-        import json
-        from pathlib import Path
-
-        summary_path = Path(__file__).resolve().parent / "employer_health_summary.json"
-        if summary_path.exists():
-            with open(summary_path, "r", encoding="utf-8") as f:
-                raw = json.load(f)
-            out = []
-            for e in raw:
-                eid = e.get("employerId")
-                out.append(
-                    {
-                        "id": eid,
-                        "employerId": eid,
-                        "name": e.get("name") or f"Employer {eid}",
-                        "job_count": e.get("JobCount") or e.get("JobCount", 0),
-                        "avg_rate": e.get("AverageHourlyRate") or e.get("avg_rate"),
-                        "sector": e.get("Sector") or e.get("sector"),
-                    }
-                )
-            return jsonify(out)
-
-        # fallback to DB
-        conn = _get_db_connection()
-        try:
-            rows = conn.execute(
-                "SELECT e.employerId AS employerId, COUNT(j.rowid) AS job_count, AVG(j.hourlyRate) AS avg_rate "
-                "FROM employers e LEFT JOIN jobs j ON e.employerId = j.employerId "
-                "GROUP BY e.employerId"
-            ).fetchall()
-            out = []
-            for r in rows:
-                eid = int(r["employerId"])
-                out.append(
-                    {
-                        "id": eid,
-                        "employerId": eid,
-                        "name": f"Employer {eid}",
-                        "job_count": int(r["job_count"])
-                        if r["job_count"] is not None
-                        else 0,
-                        "avg_rate": float(r["avg_rate"])
-                        if r["avg_rate"] is not None
-                        else None,
-                    }
-                )
-            return jsonify(out)
-        finally:
-            conn.close()
-
-    except Exception as exc:
-        return jsonify({"error": str(exc)}), 500
-
-
 def _render_resident_financial_html(data: dict) -> str:
     import json as _json
 
     page = r"""<!DOCTYPE html>
 <html><head>
 <meta charset="utf-8">
-<title>Resident Financial Health</title>
+<title>City Pulse Dashboard</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:Arial,sans-serif;background:#f4f5f7;color:#222;padding:16px}
+.header{margin-bottom:16px;text-align:left; background: #fff; padding: 16px 20px; border-radius: 10px; box-shadow: 0 1px 4px rgba(0,0,0,.1); transition: transform 0.2s, box-shadow 0.2s;}
+.header:hover{transform: translateY(-2px); box-shadow: 0 4px 15px rgba(0,0,0,.08);}
+.header h2{font-size:20px;color:#2f5d8c}
+
 .info-box { background: #fff; border-radius: 10px; padding: 12px 16px; box-shadow: 0 1px 5px rgba(0,0,0,.1);color:#aaa;
-  margin-bottom: 14px; min-height: 64px; display: flex; align-items: center; justify-content: center; gap: 20px; flex-wrap: wrap; }
+  margin-bottom: 14px; min-height: 64px; display: flex; align-items: center; justify-content: center; gap: 20px; flex-wrap: wrap; transition: transform 0.2s, box-shadow 0.2s; }
+.info-box:hover { transform: translateY(-2px); box-shadow: 0 4px 15px rgba(0,0,0,.08); }
 .detail-stat { display: flex; flex-direction: column; align-items: center; min-width: 80px; }
 .detail-label { font-size: 10px; color: #777; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 5px; }
 .detail-value { font-size: 15px; font-weight: bold; color: #2f5d8c; }
@@ -3450,9 +3328,11 @@ body{font-family:Arial,sans-serif;background:#f4f5f7;color:#222;padding:16px}
   background:#2f5d8c;color:#fff;border-radius:50%;font-size:9px;margin-left:6px;cursor:help;vertical-align:middle}
 .chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}
 .chart-panel{background:#fff;border-radius:10px;padding:14px;
-  box-shadow:0 1px 5px rgba(0,0,0,.1)}
+  box-shadow:0 1px 5px rgba(0,0,0,.1); transition: transform 0.2s, box-shadow 0.2s;}
+.chart-panel:hover{transform: translateY(-2px); box-shadow: 0 4px 15px rgba(0,0,0,.08);}
 .chart-panel.full{background:#fff;border-radius:10px;padding:14px;
-  box-shadow:0 1px 5px rgba(0,0,0,.1);margin-bottom:14px}
+  box-shadow:0 1px 5px rgba(0,0,0,.1);margin-bottom:14px; transition: transform 0.2s, box-shadow 0.2s;}
+.chart-panel.full:hover{transform: translateY(-2px); box-shadow: 0 4px 15px rgba(0,0,0,.08);}
 .chart-panel h3{font-size:14px;margin-bottom:3px}
 .chart-note{font-size:11px;color:#777;margin-bottom:10px}
 .legend{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:8px;font-size:11px}
@@ -3465,6 +3345,10 @@ body{font-family:Arial,sans-serif;background:#f4f5f7;color:#222;padding:16px}
 </style>
 </head>
 <body>
+
+<div class="header">
+    <h2>Resident Vitality & Financial Well-being</h2>
+</div>
 
 <div class="info-box" id="info-box">
   Click an education level in the <strong>Net Income by Group</strong> chart to highlight
@@ -3774,15 +3658,22 @@ drawParallelCoords();
     return page.replace("__DATA__", _json.dumps(data))
 
 
+_EMPLOYMENT_CACHE = None
+
+
 @app.route("/api/employment-page", methods=["GET"])
 def employment_page():
-    """Combined Employment dashboard: Workforce participation, shifts, happiness, and hourly activity."""
+    """Combined Employment dashboard: Optimized with caching and efficient SQL."""
+    global _EMPLOYMENT_CACHE
+    if _EMPLOYMENT_CACHE:
+        return _EMPLOYMENT_CACHE, 200, {"Content-Type": "text/html; charset=utf-8"}
+
     if not DB_PATH.exists():
         return jsonify({"error": f"Database not found: {DB_PATH}"}), 404
 
     conn = _get_db_connection()
     try:
-        # 1. Workforce participation
+        # 1. Workforce participation (Optimized)
         wf_df = pd.read_sql_query(
             """SELECT strftime('%Y-%m', timestamp) AS month,
                       COUNT(DISTINCT participantId) AS active_workers,
@@ -3792,23 +3683,39 @@ def employment_page():
             conn,
         )
 
-        # 2. Shift starts (Jobs)
-        shift_df = pd.read_sql_query(
-            "SELECT startTime, COUNT(*) as count FROM jobs GROUP BY startTime ORDER BY startTime",
+        # 2. Work-Life Balance (Optimized: Single pass joins instead of correlated subqueries)
+        balance_df = pd.read_sql_query(
+            """
+            WITH work_counts AS (
+                SELECT participantId, COUNT(*) as work_visits
+                FROM checkinjournal WHERE venueType = 'Workplace'
+                GROUP BY participantId
+            ),
+            social_counts AS (
+                SELECT participantId, COUNT(*) as social_visits
+                FROM checkinjournal WHERE venueType IN ('Pub', 'Restaurant')
+                GROUP BY participantId
+            ),
+            wage_sums AS (
+                SELECT participantId, SUM(amount)/12 as avg_wage
+                FROM financialjournal WHERE category = 'Wage'
+                GROUP BY participantId
+            )
+            SELECT 
+                p.participantId, p.educationLevel, p.joviality, p.age,
+                COALESCE(wc.work_visits, 0) as work_visits,
+                COALESCE(sc.social_visits, 0) as social_visits,
+                ws.avg_wage
+            FROM participants p
+            LEFT JOIN work_counts wc ON p.participantId = wc.participantId
+            LEFT JOIN social_counts sc ON p.participantId = sc.participantId
+            JOIN wage_sums ws ON p.participantId = ws.participantId
+            LIMIT 1000
+            """,
             conn,
         )
 
-        # 3. Wage vs Joviality
-        happiness_df = pd.read_sql_query(
-            """SELECT p.joviality, SUM(f.amount)/12 as avg_wage
-               FROM participants p
-               JOIN financialjournal f ON p.participantId = f.participantId
-               WHERE f.category = 'Wage'
-               GROUP BY p.participantId LIMIT 2000""",
-            conn,
-        )
-
-        # 4. Hourly Workplace Activity
+        # 3. Hourly Workplace Activity (Fast with simple GROUP BY)
         hourly_df = pd.read_sql_query(
             """SELECT strftime('%H', timestamp) as hour, COUNT(*) as count
                FROM checkinjournal
@@ -3819,34 +3726,39 @@ def employment_page():
     finally:
         conn.close()
 
-    # Build workforce data
-    wf_data = {"months": wf_df["month"].tolist(), "series": [
-        {"name": "Active Workers", "values": wf_df["active_workers"].tolist(), "color": "#2ca02c"},
-        {"name": "Avg Monthly Wage", "values": [round(v, 2) for v in wf_df["avg_wage"].tolist()], "color": "#ff7f0e"}
-    ]} if not wf_df.empty else {"months": [], "series": []}
+    wf_data = (
+        {
+            "months": wf_df["month"].tolist(),
+            "series": [
+                {
+                    "name": "Active Workers",
+                    "values": wf_df["active_workers"].tolist(),
+                    "color": "#2ca02c",
+                },
+                {
+                    "name": "Avg Monthly Wage",
+                    "values": [round(v, 2) for v in wf_df["avg_wage"].tolist()],
+                    "color": "#ff7f0e",
+                },
+            ],
+        }
+        if not wf_df.empty
+        else {"months": [], "series": []}
+    )
 
-    # Build shift data
-    shift_data = {
-        "labels": shift_df["startTime"].tolist(),
-        "values": shift_df["count"].tolist()
-    } if not shift_df.empty else {"labels": [], "values": []}
+    balance_points = balance_df.dropna().to_dict(orient="records")
+    hourly_data = (
+        {
+            "labels": [f"{int(h):02d}:00" for h in hourly_df["hour"].tolist()],
+            "values": hourly_df["count"].tolist(),
+        }
+        if not hourly_df.empty
+        else {"labels": [], "values": []}
+    )
 
-    # Build happiness data (scatter)
-    happiness_points = happiness_df.dropna().to_dict(orient="records") if not happiness_df.empty else []
-
-    # Build hourly activity
-    hourly_data = {
-        "labels": [f"{int(h):02d}:00" for h in hourly_df["hour"].tolist()],
-        "values": hourly_df["count"].tolist()
-    } if not hourly_df.empty else {"labels": [], "values": []}
-
-    data = {
-        "workforce": wf_data,
-        "shifts": shift_data,
-        "happiness": happiness_points,
-        "hourly": hourly_data
-    }
+    data = {"workforce": wf_data, "balance": balance_points, "hourly": hourly_data}
     html = _render_employment_html(data)
+    _EMPLOYMENT_CACHE = html
     return html, 200, {"Content-Type": "text/html; charset=utf-8"}
 
 
@@ -4106,50 +4018,57 @@ def _render_employment_html(data: dict) -> str:
 <!DOCTYPE html>
 <html><head>
 <meta charset="utf-8">
-<title>Employment Insights</title>
+<title>Labor Dynamics Dashboard</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:Arial,sans-serif;background:#f4f5f7;color:#222;padding:20px}
-.header { margin-bottom: 20px; text-align: center; }
-.header h2 { font-size: 24px; color: #2f5d8c; }
-.dashboard-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; }
-.chart-panel{background:#fff;border-radius:10px;padding:20px;box-shadow:0 1px 5px rgba(0,0,0,.1); min-height: 400px; display: flex; flex-direction: column;}
-.chart-panel h3{font-size:16px;margin-bottom:12px; display: flex; align-items: center;}
+body{font-family:'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;background:#f4f5f7;color:#222;padding:20px}
+.header { margin-bottom: 24px; text-align: left; border-bottom: 2px solid #2f5d8c; padding-bottom: 12px; display: flex; justify-content: space-between; align-items: flex-end; }
+.header h2 { font-size: 26px; color: #2f5d8c; margin: 0; }
+.header p { font-size: 14px; color: #666; margin: 0; }
+.dashboard-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 24px; }
+.chart-panel{background:#fff;border-radius:12px;padding:24px;box-shadow:0 2px 10px rgba(0,0,0,.05); min-height: 420px; display: flex; flex-direction: column; transition: transform 0.2s;}
+.chart-panel:hover { transform: translateY(-2px); box-shadow: 0 4px 15px rgba(0,0,0,.08); }
+.chart-panel h3{font-size:17px; color:#333; margin-bottom:16px; display: flex; align-items: center; font-weight: 600;}
 .chart-panel.full-width { grid-column: span 2; }
-.tooltip { position: fixed; background: rgba(20, 20, 20, 0.92); color: #fff; padding: 8px 12px;
-  border-radius: 6px; font-size: 12px; pointer-events: none; opacity: 0;
-  transition: opacity 0.12s; line-height: 1.6; z-index: 1000; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
-.info-icon{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;
-  background:#2f5d8c;color:#fff;border-radius:50%;font-size:9px;margin-left:6px;cursor:help;vertical-align:middle}
+.tooltip { position: fixed; background: rgba(20, 20, 20, 0.92); color: #fff; padding: 10px 14px;
+  border-radius: 8px; font-size: 12px; pointer-events: none; opacity: 0;
+  transition: opacity 0.12s; line-height: 1.6; z-index: 1000; box-shadow: 0 4px 12px rgba(0,0,0,0.15); border: 1px solid rgba(255,255,255,0.1); }
+.info-icon{display:inline-flex;align-items:center;justify-content:center;width:16px;height:14px;
+  background:#2f5d8c;color:#fff;border-radius:50%;font-size:10px;margin-left:8px;cursor:help;vertical-align:middle}
 .chart-container { flex-grow: 1; position: relative; }
-@media(max-width: 900px) { .dashboard-grid { grid-template-columns: 1fr; } .chart-panel.full-width { grid-column: span 1; } }
+.ctrl-group { display: flex; gap: 10px; margin-bottom: 16px; }
+.btn-toggle { background: #eee; border: 1px solid #ddd; padding: 4px 12px; border-radius: 20px; font-size: 11px; cursor: pointer; transition: all 0.2s; }
+.btn-toggle.active { background: #2f5d8c; color: #fff; border-color: #2f5d8c; }
+@media(max-width: 1000px) { .dashboard-grid { grid-template-columns: 1fr; } .chart-panel.full-width { grid-column: span 1; } }
 </style>
 </head>
 <body>
 
-<div class="header">
-    <h2>Advanced Employment Analytics</h2>
-</div>
-
 <div class="dashboard-grid">
+    <!-- Row 1 -->
     <div class="chart-panel full-width">
-        <h3>Workforce Participation & Wages <span class="info-icon" onmouseover="showTip('<strong>City-wide trends</strong><br>Tracks the volume of active workers and average monthly wage levels.', event)" onmouseout="hideTip()">?</span></h3>
+        <h3>Workforce Participation & Wage Trends <span class="info-icon" onmouseover="showTip('<strong>City-wide trends</strong><br>Tracks the volume of active workers and average monthly wage levels over time.<br>Identifies seasonal cycles and economic stability.', event)" onmouseout="hideTip()">?</span></h3>
         <div id="ch-workforce" class="chart-container"></div>
     </div>
 
-    <div class="chart-panel">
-        <h3>Shift Start Time Distribution <span class="info-icon" onmouseover="showTip('<strong>Workforce Timing</strong><br>Frequency of jobs starting at specific times of the day.', event)" onmouseout="hideTip()">?</span></h3>
-        <div id="ch-shifts" class="chart-container"></div>
-    </div>
 
     <div class="chart-panel">
-        <h3>Workplace Activity by Hour <span class="info-icon" onmouseover="showTip('<strong>Daily Rythm</strong><br>Aggregated check-in volume at workplaces throughout the day.', event)" onmouseout="hideTip()">?</span></h3>
+    <h3>Work-Life Balance Map 
+        <span class="info-icon" 
+        onmouseover="showTip('<strong>Work vs Social Activity</strong><br>Each point represents an individual lifestyle pattern.<br>The chart compares workplace activity with visits to restaurants and pubs.<br>Color indicates education level, revealing trends between career intensity and leisure habits.<br>Hover over a point to inspect detailed profiles.', event)" 
+        onmouseout="hideTip()">?</span>
+    </h3>
+
+    <div class="ctrl-group">
+        <button class="btn-toggle active" onclick="updateScatter('visits')">Work vs Social</button>
+        <button class="btn-toggle" onclick="updateScatter('happiness')">Income vs Happiness</button>
+    </div>
+
+    <div id="ch-lifestyle" class="chart-container"></div>
+</div>
+    <div class="chart-panel">
+        <h3>Workplace Activity Rhythm <span class="info-icon" onmouseover="showTip('<strong>Daily Pulse</strong><br>Aggregated check-in volume at workplaces throughout the day.<br>Identifies peak shift times and transition hours.', event)" onmouseout="hideTip()">?</span></h3>
         <div id="ch-hourly" class="chart-container"></div>
-    </div>
-
-    <div class="chart-panel full-width">
-        <h3>Wage vs. Happiness (Joviality) <span class="info-icon" onmouseover="showTip('<strong>Economic Psychology</strong><br>Scatter plot showing the relationship between average monthly wage and participant joviality.', event)" onmouseout="hideTip()">?</span></h3>
-        <div id="ch-happiness" class="chart-container"></div>
     </div>
 </div>
 
@@ -4166,12 +4085,18 @@ function showTip(html, ev) {
 }
 function hideTip() { tip.style('opacity', 0); }
 
+const EDU_COLORS = {
+    "Low": "#e41a1c",
+    "HighSchoolOrCollege": "#ff7f00",
+    "Bachelors": "#4daf4a",
+    "Graduate": "#377eb8"
+};
+
 const colors = {
     wage: "#ff7f0e",
     workers: "#2ca02c",
     activity: "#1f77b4",
-    shift: "#9467bd",
-    scatter: "#e377c2"
+    trend: "#333"
 };
 
 // ── 1. Workforce participation ──────────────────────────────────
@@ -4180,7 +4105,7 @@ const colors = {
   if(!months || !months.length) return;
   const el = document.getElementById('ch-workforce');
   const W = el.clientWidth, H = el.clientHeight || 350;
-  const m = {top:20, right:60, bottom:50, left:60};
+  const m = {top:20, right:70, bottom:60, left:70};
   const w = W - m.left - m.right, h = H - m.top - m.bottom;
 
   const svg = d3.select(el).append('svg').attr('width',W).attr('height',H);
@@ -4192,53 +4117,96 @@ const colors = {
   
   g.append('g').attr('transform',`translate(0,${h})`)
 	.call(d3.axisBottom(x).tickValues(months.filter((_,i)=>i%4===0)).tickSize(-h))
-	.call(ax=>{ax.selectAll('.tick line').attr('stroke','#eee');ax.select('.domain').remove();})
-	.selectAll('text').attr('transform','rotate(-30)').attr('text-anchor','end').attr('font-size',10);
+	.call(ax=>{ax.selectAll('.tick line').attr('stroke','#f0f0f0');ax.select('.domain').remove();})
+	.selectAll('text').attr('transform','rotate(-30)').attr('text-anchor','end').attr('font-size',11).attr('fill', '#888');
 
-  g.append('g').call(d3.axisLeft(yL).ticks(6)).selectAll('text').attr('fill', series[0].color);
+  g.append('g').call(d3.axisLeft(yL).ticks(6)).selectAll('text').attr('fill', series[0].color).attr('font-size', 11);
   g.append('g').attr('transform',`translate(${w},0)`)
 	.call(d3.axisRight(yR).ticks(6).tickFormat(d=>'$'+d3.format(',.0s')(d)))
-	.selectAll('text').attr('fill', series[1].color);
+	.selectAll('text').attr('fill', series[1].color).attr('font-size', 11);
+
+  // Y-axis labels
+  g.append('text').attr('transform', 'rotate(-90)').attr('y', -55).attr('x', -h/2).attr('text-anchor', 'middle').attr('fill', series[0].color).attr('font-size', 12).attr('font-weight', 'bold').text('Active Wage Earners');
+  g.append('text').attr('transform', 'rotate(90)').attr('y', -w - 55).attr('x', h/2).attr('text-anchor', 'middle').attr('fill', series[1].color).attr('font-size', 12).attr('font-weight', 'bold').text('Avg Monthly Wage');
 
   series.forEach((s,i)=>{
 	const ysc = i===0?yL:yR;
 	g.append('path').datum(s.values).attr('fill','none')
-	  .attr('stroke',s.color).attr('stroke-width',3)
+	  .attr('stroke',s.color).attr('stroke-width',4)
       .attr('d', d3.line().x((_,idx)=>x(months[idx])).y(d=>ysc(d)).curve(d3.curveMonotoneX));
     
     g.selectAll(`.dot-${i}`).data(s.values).enter().append('circle')
-      .attr('cx', (_, idx) => x(months[idx])).attr('cy', d => ysc(d)).attr('r', 4).attr('fill', s.color)
+      .attr('cx', (_, idx) => x(months[idx])).attr('cy', d => ysc(d)).attr('r', 5).attr('fill', s.color)
       .on('mouseover', (ev, d) => showTip(`<strong>${months[s.values.indexOf(d)]}</strong><br>${s.name}: <strong>${i===0?d.toLocaleString():'$'+d.toLocaleString()}</strong>`, ev))
       .on('mouseout', hideTip);
   });
 })();
 
-// ── 2. Shift Starts (Bar) ───────────────────────────────────────
-(function drawShifts(){
-    const {labels, values} = DATA.shifts;
-    if(!labels.length) return;
-    const el = document.getElementById('ch-shifts');
+// ── 2. Lifestyle Scatter (INTERACTIVE) ──────────────────────────
+let scatterSvg, sx, sy, scatterPoints, scatterLabels;
+function initScatter(){
+    const data = DATA.balance;
+    if(!data.length) return;
+    const el = document.getElementById('ch-lifestyle');
     const W = el.clientWidth, H = el.clientHeight || 350;
-    const m = {top:20, right:30, bottom:60, left:60};
+    const m = {top:20, right:40, bottom:60, left:60};
     const w = W - m.left - m.right, h = H - m.top - m.bottom;
 
-    const svg = d3.select(el).append('svg').attr('width', W).attr('height', H);
-    const g = svg.append('g').attr('transform', `translate(${m.left},${m.top})`);
+    scatterSvg = d3.select(el).append('svg').attr('width', W).attr('height', H);
+    const g = scatterSvg.append('g').attr('transform', `translate(${m.left},${m.top})`);
 
-    const x = d3.scaleBand().domain(labels).range([0, w]).padding(0.2);
-    const y = d3.scaleLinear().domain([0, d3.max(values) * 1.1]).nice().range([h, 0]);
+    sx = d3.scaleLinear().range([0, w]);
+    sy = d3.scaleLinear().range([h, 0]);
 
-    g.append('g').attr('transform', `translate(0, ${h})`).call(d3.axisBottom(x))
-     .selectAll('text').attr('transform', 'rotate(-45)').attr('text-anchor', 'end');
-    g.append('g').call(d3.axisLeft(y).ticks(5));
+    g.append('g').attr('class', 'x-axis').attr('transform', `translate(0, ${h})`);
+    g.append('g').attr('class', 'y-axis');
 
-    g.selectAll('.bar').data(values).enter().append('rect')
-     .attr('x', (_, i) => x(labels[i])).attr('y', d => y(d))
-     .attr('width', x.bandwidth()).attr('height', d => h - y(d))
-     .attr('fill', colors.shift).attr('opacity', 0.8)
-     .on('mouseover', (ev, d) => showTip(`Start Time: <strong>${labels[values.indexOf(d)]}</strong><br>Jobs: <strong>${d.toLocaleString()}</strong>`, ev))
-     .on('mouseout', hideTip);
-})();
+    scatterLabels = {
+        x: g.append('text').attr('x', w/2).attr('y', h+45).attr('text-anchor', 'middle').attr('font-size', 12).attr('fill', '#444').attr('font-weight', 'bold'),
+        y: g.append('text').attr('transform', 'rotate(-90)').attr('x', -h/2).attr('y', -45).attr('text-anchor', 'middle').attr('font-size', 12).attr('fill', '#444').attr('font-weight', 'bold')
+    };
+
+    scatterPoints = g.selectAll('.dot');
+    updateScatter('visits');
+}
+
+function updateScatter(mode){
+    d3.selectAll('.btn-toggle').classed('active', false);
+    event?.target?.classList?.add('active');
+
+    const data = DATA.balance;
+    const xKey = mode === 'visits' ? 'work_visits' : 'avg_wage';
+    const yKey = mode === 'visits' ? 'social_visits' : 'joviality';
+    
+    sx.domain([0, d3.max(data, d => d[xKey]) * 1.05]).nice();
+    sy.domain([0, d3.max(data, d => d[yKey]) * 1.1]).nice();
+
+    scatterSvg.select('.x-axis').transition().duration(800).call(d3.axisBottom(sx).ticks(6).tickFormat(mode==='visits'?d3.format('d'):d=>'$'+d3.format('.0s')(d)));
+    scatterSvg.select('.y-axis').transition().duration(800).call(d3.axisLeft(sy).ticks(6));
+
+    scatterLabels.x.text(mode === 'visits' ? 'Workplace Visits (Total)' : 'Estimated Monthly Wage ($)');
+    scatterLabels.y.text(mode === 'visits' ? 'Leisure Visits (Pubs & Restaurants)' : 'Happiness Score (Joviality)');
+
+    const dots = scatterSvg.select('g').selectAll('.dot').data(data);
+
+    dots.enter().append('circle').attr('class', 'dot')
+        .attr('r', 5).attr('fill', d => EDU_COLORS[d.educationLevel] || '#999').attr('opacity', 0.6)
+        .attr('cx', d => sx(d[xKey])).attr('cy', d => sy(d[yKey]))
+        .on('mouseover', (ev, d) => {
+            d3.select(ev.target).transition().attr('r', 8).attr('opacity', 1);
+            showTip(`<strong>Participant #${d.participantId}</strong><br>Education: <strong>${d.educationLevel}</strong><br>Age: <strong>${d.age}</strong><br>Wage: <strong>$${Math.round(d.avg_wage).toLocaleString()}</strong><br>Happiness: <strong>${d.joviality.toFixed(3)}</strong>`, ev);
+        })
+        .on('mouseout', (ev) => {
+            d3.select(ev.target).transition().attr('r', 5).attr('opacity', 0.6);
+            hideTip();
+        })
+        .merge(dots)
+        .transition().duration(800)
+        .attr('cx', d => sx(d[xKey]))
+        .attr('cy', d => sy(d[yKey]));
+
+    dots.exit().remove();
+}
 
 // ── 3. Hourly Activity (Area) ──────────────────────────────────
 (function drawHourly(){
@@ -4246,7 +4214,7 @@ const colors = {
     if(!labels.length) return;
     const el = document.getElementById('ch-hourly');
     const W = el.clientWidth, H = el.clientHeight || 350;
-    const m = {top:20, right:30, bottom:40, left:60};
+    const m = {top:20, right:30, bottom:50, left:60};
     const w = W - m.left - m.right, h = H - m.top - m.bottom;
 
     const svg = d3.select(el).append('svg').attr('width', W).attr('height', H);
@@ -4257,62 +4225,29 @@ const colors = {
 
     const area = d3.area().x((_,i)=>x(labels[i])).y0(h).y1(d=>y(d)).curve(d3.curveMonotoneX);
 
-    g.append('path').datum(values).attr('fill', colors.activity).attr('opacity', 0.3).attr('d', area);
-    g.append('path').datum(values).attr('fill', 'none').attr('stroke', colors.activity).attr('stroke-width', 2).attr('d', d3.line().x((_,i)=>x(labels[i])).y(d=>y(d)).curve(d3.curveMonotoneX));
+    g.append('path').datum(values).attr('fill', colors.activity).attr('opacity', 0.2).attr('d', area);
+    g.append('path').datum(values).attr('fill', 'none').attr('stroke', colors.activity).attr('stroke-width', 3).attr('d', d3.line().x((_,i)=>x(labels[i])).y(d=>y(d)).curve(d3.curveMonotoneX));
 
-    g.append('g').attr('transform', `translate(0, ${h})`).call(d3.axisBottom(x).tickValues(labels.filter((_,i)=>i%3===0)));
-    g.append('g').call(d3.axisLeft(y).ticks(5).tickFormat(d3.format('.2s')));
+    g.append('g').attr('transform', `translate(0, ${h})`).call(d3.axisBottom(x).tickValues(labels.filter((_,i)=>i%3===0)))
+     .selectAll('text').attr('fill', '#888').attr('font-size', 11);
+    g.append('g').call(d3.axisLeft(y).ticks(5).tickFormat(d3.format('.2s')))
+     .selectAll('text').attr('fill', '#888').attr('font-size', 11);
 
     g.selectAll('.dot').data(values).enter().append('circle')
-     .attr('cx', (_, i) => x(labels[i])).attr('cy', d => y(d)).attr('r', 4).attr('fill', colors.activity)
-     .on('mouseover', (ev, d) => showTip(`Time: <strong>${labels[values.indexOf(d)]}</strong><br>Workplace Check-ins: <strong>${d.toLocaleString()}</strong>`, ev))
-     .on('mouseout', hideTip);
-})();
-
-// ── 4. Happiness Scatter ──────────────────────────────────────
-(function drawHappiness(){
-    const data = DATA.happiness;
-    if(!data.length) return;
-    const el = document.getElementById('ch-happiness');
-    const W = el.clientWidth, H = el.clientHeight || 350;
-    const m = {top:20, right:40, bottom:50, left:60};
-    const w = W - m.left - m.right, h = H - m.top - m.bottom;
-
-    const svg = d3.select(el).append('svg').attr('width', W).attr('height', H);
-    const g = svg.append('g').attr('transform', `translate(${m.left},${m.top})`);
-
-    const x = d3.scaleLinear().domain([0, d3.max(data, d=>d.avg_wage)]).nice().range([0, w]);
-    const y = d3.scaleLinear().domain([0, 1]).range([h, 0]);
-
-    g.append('g').attr('transform', `translate(0, ${h})`).call(d3.axisBottom(x).tickFormat(d=>'$'+d3.format('.2s')(d)));
-    g.append('g').call(d3.axisLeft(y).ticks(5));
-
-    // Labels
-    g.append('text').attr('x', w/2).attr('y', h+40).attr('text-anchor', 'middle').attr('font-size', 11).text('Estimated Monthly Wage ($)');
-    g.append('text').attr('transform', 'rotate(-90)').attr('x', -h/2).attr('y', -45).attr('text-anchor', 'middle').attr('font-size', 11).text('Joviality (Happiness Score)');
-
-    g.selectAll('.dot').data(data).enter().append('circle')
-     .attr('cx', d => x(d.avg_wage)).attr('cy', d => y(d.joviality))
-     .attr('r', 3).attr('fill', colors.scatter).attr('opacity', 0.5)
-     .on('mouseover', (ev, d) => showTip(`Wage: <strong>$${d.avg_wage.toLocaleString()}</strong><br>Happiness: <strong>${d.joviality.toFixed(3)}</strong>`, ev))
+     .attr('cx', (_, i) => x(labels[i])).attr('cy', d => y(d)).attr('r', 5).attr('fill', colors.activity).attr('opacity', 0.8)
+     .on('mouseover', (ev, d) => showTip(`Time: <strong>${labels[values.indexOf(d)]}</strong><br>Check-ins: <strong>${d.toLocaleString()}</strong>`, ev))
      .on('mouseout', hideTip);
     
-    // Regression line (simple linear)
-    const x1 = d3.min(data, d=>d.avg_wage), x2 = d3.max(data, d=>d.avg_wage);
-    const sumX = d3.sum(data, d=>d.avg_wage), sumY = d3.sum(data, d=>d.joviality);
-    const sumXY = d3.sum(data, d=>d.avg_wage * d.joviality), sumX2 = d3.sum(data, d=>d.avg_wage * d.avg_wage);
-    const n = data.length;
-    const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
-    const intercept = (sumY - slope * sumX) / n;
-    
-    g.append('line').attr('x1', x(x1)).attr('y1', y(slope*x1+intercept)).attr('x2', x(x2)).attr('y2', y(slope*x2+intercept))
-     .attr('stroke', '#333').attr('stroke-width', 2).attr('stroke-dasharray', '5,5');
+    g.append('text').attr('transform', 'rotate(-90)').attr('x', -h/2).attr('y', -45).attr('text-anchor', 'middle').attr('font-size', 12).attr('font-weight', 'bold').attr('fill', '#444').text('Workplace Traffic Volume');
 })();
+
+initScatter();
 </script>
 </body></html>"""
 
     return page.replace("__DATA__", _json.dumps(data))
 
+    return page.replace("__DATA__", _json.dumps(data))
 
     return page.replace("__DATA__", _json.dumps(data))
 
