@@ -798,6 +798,9 @@ def _render_synced_joined_views_html(
 	.active { stroke: #111; stroke-width: 2px; opacity: 1 !important; }
 	.axis text { font-size: 10px; }
 	.axis path, .axis line { stroke: #bbb; }
+	.tooltip { position: fixed; background: rgba(20, 20, 20, 0.92); color: #fff; padding: 8px 12px;
+	  border-radius: 6px; font-size: 12px; pointer-events: none; opacity: 0;
+	  transition: opacity 0.12s; line-height: 1.6; z-index: 1000; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
 </style>
 <script src="https://d3js.org/d3.v7.min.js"></script>
 </head>
@@ -811,12 +814,21 @@ def _render_synced_joined_views_html(
 </div>
 
 <div class="grid" id="chartGrid"></div>
+<div class="tooltip" id="tip"></div>
 
 <script>
 const views = __VIEWS__;
 const palette = __PALETTE__;
 
 const grid = d3.select('#chartGrid');
+const tip = d3.select('#tip');
+
+function showTip(html, ev) {
+  tip.html(html).style('opacity', 1)
+     .style('left', (ev.clientX + 15) + 'px').style('top', (ev.clientY - 45) + 'px');
+}
+function hideTip() { tip.style('opacity', 0); }
+
 const chartState = [];
 const selectionState = {
 	hoverRowIds: [],
@@ -960,8 +972,14 @@ function renderScatterLike(containerId, view) {
 		.attr('r', 3.5)
 		.attr('fill', d => colorForRow(d.rowId))
 		.attr('data-row-id', d => d.rowId)
-		.on('mouseover', (event, d) => setHoverRows([d.rowId]))
-		.on('mouseout', clearHoverRows);
+		.on('mouseover', (event, d) => {
+			setHoverRows([d.rowId]);
+			showTip(`<strong>Row: ${d.rowId}</strong><br>${view.xLabel}: <strong>${d.x}</strong><br>${view.yLabel}: <strong>${d.y}</strong>`, event);
+		})
+		.on('mouseout', () => {
+			clearHoverRows();
+			hideTip();
+		});
 
 	view.points.forEach(d => {
 		d.__px = x(d.x);
@@ -1006,7 +1024,9 @@ function renderHistogram(containerId, view) {
 	const yScale = d3.scaleLinear().domain([0, d3.max(view.bars, d => d.count) || 1]).nice().range([height - margin.bottom, margin.top]);
 	const binWidth = (domain[1] - domain[0]) / bins;
 	view.bars.forEach(d => {
-		d.__x0 = xScale(domain[0] + d.bin * binWidth);
+		d.__x0_val = domain[0] + d.bin * binWidth;
+		d.__x1_val = d.__x0_val + binWidth;
+		d.__x0 = xScale(d.__x0_val);
 		d.__x1 = d.__x0 + Math.max(1, (width - margin.left - margin.right) / bins - 1);
 		d.__y0 = yScale(d.count);
 		d.__y1 = yScale(0);
@@ -1023,8 +1043,14 @@ function renderHistogram(containerId, view) {
 		.attr('height', d => d.__y1 - d.__y0)
 		.attr('fill', d => colorForRow(d.rowIds[0] ?? 0))
 		.attr('data-row-ids', d => d.rowIds.join(','))
-		.on('mouseover', (event, d) => setHoverRows(d.rowIds))
-		.on('mouseout', clearHoverRows);
+		.on('mouseover', (event, d) => {
+			setHoverRows(d.rowIds);
+			showTip(`<strong>Range:</strong> ${d.__x0_val.toFixed(2)} - ${d.__x1_val.toFixed(2)}<br><strong>Count:</strong> ${d.count}`, event);
+		})
+		.on('mouseout', () => {
+			clearHoverRows();
+			hideTip();
+		});
 	attachBrush(svg, [[margin.left, margin.top], [width - margin.right, height - margin.bottom]], view, 'histogram');
 
 	chartState.push({ svg });
@@ -1055,8 +1081,14 @@ function renderBar(containerId, view) {
 		.attr('height', d => d.__y1 - d.__y0)
 		.attr('fill', d => colorForRow(d.rowIds[0] ?? 0))
 		.attr('data-row-ids', d => d.rowIds.join(','))
-		.on('mouseover', (event, d) => setHoverRows(d.rowIds))
-		.on('mouseout', clearHoverRows);
+		.on('mouseover', (event, d) => {
+			setHoverRows(d.rowIds);
+			showTip(`<strong>Category:</strong> ${d.category}<br><strong>Value:</strong> ${d.value.toFixed(2)}`, event);
+		})
+		.on('mouseout', () => {
+			clearHoverRows();
+			hideTip();
+		});
 	attachBrush(svg, [[margin.left, margin.top], [width - margin.right, height - margin.bottom]], view, 'bar');
 
 	chartState.push({ svg });
@@ -1096,8 +1128,14 @@ function renderBoxplot(containerId, view) {
 		.attr('height', d => Math.max(1, y(d.q1) - y(d.q3)))
 		.attr('fill', d => colorForRow(d.rowIds[0] ?? 0))
 		.attr('data-row-ids', d => d.rowIds.join(','))
-		.on('mouseover', (event, d) => setHoverRows(d.rowIds))
-		.on('mouseout', clearHoverRows);
+		.on('mouseover', (event, d) => {
+			setHoverRows(d.rowIds);
+			showTip(`<strong>Category:</strong> ${d.category}<br>Median: <strong>${d.median.toFixed(2)}</strong><br>Q1: ${d.q1.toFixed(2)} | Q3: ${d.q3.toFixed(2)}<br>Min: ${d.min.toFixed(2)} | Max: ${d.max.toFixed(2)}`, event);
+		})
+		.on('mouseout', () => {
+			clearHoverRows();
+			hideTip();
+		});
 
 	g.selectAll('line.median').data(view.groups).join('line')
 		.attr('class', 'median')
@@ -1290,13 +1328,20 @@ function renderHeatmap(containerId, view) {
 	svg.append('g').selectAll('rect').data(view.cells).join('rect')
 		.attr('x', d => d.__x0)
 		.attr('y', d => d.__y0)
-		.attr('width', Math.max(1, cellW))
-		.attr('height', Math.max(1, cellH))
+		.attr('width', d => d.__x1 - d.__x0)
+		.attr('height', d => d.__y1 - d.__y0)
 		.attr('fill', d => color(d.count))
-		.attr('stroke', '#fff')
+		.attr('stroke', '#fff').attr('stroke-width', 0.5)
 		.attr('data-row-ids', d => d.rowIds.join(','))
-		.on('mouseover', (event, d) => setHoverRows(d.rowIds))
-		.on('mouseout', clearHoverRows);
+		.on('mouseover', (event, d) => {
+			setHoverRows(d.rowIds);
+			showTip(`<strong>Count:</strong> ${d.count}<br>Rows: ${d.rowIds.length}`, event);
+		})
+		.on('mouseout', () => {
+			clearHoverRows();
+			hideTip();
+		});
+
 	attachBrush(svg, [[margin.left, margin.top], [width - margin.right, height - margin.bottom]], view, 'heatmap');
 
 	chartState.push({ svg });
@@ -1886,37 +1931,42 @@ def _get_job_transitions(conn: sqlite3.Connection) -> tuple[pd.DataFrame, pd.Dat
     rows = conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'participantstatuslogs%'"
     ).fetchall()
-    tables = sorted(
-        [r[0] for r in rows], key=lambda x: int(re.search(r"(\d+)$", x).group(1))
-    )
+
+    def _extract_number(name: str) -> int:
+        match = re.search(r"(\d+)$", name)
+        return int(match.group(1)) if match else 0
+
+    tables = sorted([r[0] for r in rows], key=_extract_number)
     if len(tables) < 2:
         return pd.DataFrame(), pd.DataFrame()
 
     jobs_df = pd.read_sql_query("SELECT jobId, employerId FROM jobs", conn)
 
     def dominant_employer(table: str) -> pd.DataFrame:
-        df = pd.read_sql_query(
-            f"""
-			SELECT participantId, jobId, COUNT(*) AS cnt
-			FROM {_quote_identifier(table)}
-			WHERE jobId IS NOT NULL
-			  AND TRIM(CAST(jobId AS TEXT)) NOT IN ('', 'N/A', 'nan')
-			GROUP BY participantId, jobId
-			""",
-            conn,
-        )
-        if df.empty:
+        # Optimization: Move the "dominant" logic into SQL to avoid loading millions of rows into memory
+        query = f"""
+            SELECT participantId, jobId
+            FROM (
+                SELECT participantId, jobId, COUNT(*) AS cnt,
+                        ROW_NUMBER() OVER (PARTITION BY participantId ORDER BY COUNT(*) DESC) as rn
+                FROM {_quote_identifier(table)}
+                WHERE jobId IS NOT NULL
+                    AND jobId NOT IN ('', 'N/A', 'nan')
+                GROUP BY participantId, jobId
+            ) WHERE rn = 1
+        """
+        try:
+            top = pd.read_sql_query(query, conn)
+            if top.empty:
+                return pd.DataFrame(columns=["participantId", "employerId"])
+
+            top["jobId"] = pd.to_numeric(top["jobId"], errors="coerce")
+            return top.merge(jobs_df, on="jobId", how="left")[
+                ["participantId", "employerId"]
+            ].dropna()
+        except Exception as e:
+            print(f"Error processing table {table}: {e}")
             return pd.DataFrame(columns=["participantId", "employerId"])
-        top = (
-            df.sort_values("cnt", ascending=False)
-            .groupby("participantId")
-            .first()
-            .reset_index()[["participantId", "jobId"]]
-        )
-        top["jobId"] = pd.to_numeric(top["jobId"], errors="coerce")
-        return top.merge(jobs_df, on="jobId", how="left")[
-            ["participantId", "employerId"]
-        ].dropna()
 
     return dominant_employer(tables[0]), dominant_employer(tables[-1])
 
@@ -2076,7 +2126,12 @@ body { margin: 0; font-family: Arial, sans-serif; background: #f4f5f7; color: #2
 .deselect-btn:hover { background: #e8e8e8; }
 
 /* details bar */
-.details-bar { font-size: 11px; color: #444; margin-top: 8px; min-height: 22px; line-height: 1.6; }
+.details-bar { background: #fff; border-radius: 10px; padding: 12px 16px; box-shadow: 0 1px 5px rgba(0,0,0,.1);
+  margin-top: 14px; min-height: 64px; display: flex; align-items: center; justify-content: center; gap: 20px; flex-wrap: wrap; }
+.detail-stat { display: flex; flex-direction: column; align-items: center; min-width: 70px; }
+.detail-label { font-size: 10px; color: #777; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 5px; }
+.detail-value { font-size: 15px; font-weight: bold; color: #2f5d8c; }
+.detail-val-cat { padding: 2px 8px; border-radius: 12px; color: #fff; font-size: 11px; font-weight: bold; }
 
 /* chart grid */
 .charts-top { display: grid; grid-template-columns: 3fr 2fr; gap: 14px; margin-bottom: 14px; }
@@ -2099,11 +2154,13 @@ body { margin: 0; font-family: Arial, sans-serif; background: #f4f5f7; color: #2
 .grad-legend { display: flex; align-items: center; gap: 6px; font-size: 10px;
   color: #888; margin-bottom: 6px; }
 
+.info-icon { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px;
+  background: #2f5d8c; color: #fff; border-radius: 50%; font-size: 9px; margin-left: 6px; cursor: help; vertical-align: middle; }
+
 /* shared tooltip */
-.tooltip { position: fixed; background: rgba(255,255,255,.97); border: 1px solid #ddd;
-  padding: 7px 10px; font-size: 11px; border-radius: 5px; pointer-events: none;
-  opacity: 0; transition: opacity .1s; box-shadow: 0 2px 8px rgba(0,0,0,.12);
-  line-height: 1.65; z-index: 100; max-width: 240px; }
+.tooltip { position: fixed; background: rgba(20, 20, 20, 0.92); color: #fff; padding: 8px 12px;
+  border-radius: 6px; font-size: 12px; pointer-events: none; opacity: 0;
+  transition: opacity 0.12s; line-height: 1.6; z-index: 1000; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
 
 .axis text { font-size: 9px; fill: #666; }
 .axis path, .axis line { stroke: #ddd; }
@@ -2129,8 +2186,7 @@ body { margin: 0; font-family: Arial, sans-serif; background: #f4f5f7; color: #2
   <div class="charts-top">
     <!-- SCATTER -->
     <div class="panel">
-      <h3>Prosperity Scatter</h3>
-      <p class="panel-sub">x = avg hourly rate &nbsp;|&nbsp; y = job listings &nbsp;|&nbsp; size = stable workers &nbsp;|&nbsp; colour = health score</p>
+      <h3>Prosperity Scatter <span class="info-icon" onmouseover="showTip('<strong>Avg hourly rate vs job listings</strong><br>Dot size = stable workers.<br> Colour = health score.', event)" onmouseout="hideTip()">?</span></h3>
       <div class="grad-legend">
         <span>Low score</span>
         <canvas id="grad-canvas" width="120" height="9" style="border-radius:3px"></canvas>
@@ -2148,8 +2204,7 @@ body { margin: 0; font-family: Arial, sans-serif; background: #f4f5f7; color: #2
 
     <!-- RANKING -->
     <div class="panel">
-      <h3>Health Ranking</h3>
-      <p class="panel-sub">Derived score per employer. Colour = Prosperous / Neutral / Struggling.</p>
+      <h3>Health Ranking <span class="info-icon" onmouseover="showTip('<strong>Derived health score per employer</strong><br>Green=Prosperous <br> Yellow=Neutra <br> Red=Struggling', event)" onmouseout="hideTip()">?</span></h3>
       <div class="rank-ctrl">
         Sort:
         <select id="rank-sort" onchange="drawRanking()">
@@ -2174,8 +2229,7 @@ body { margin: 0; font-family: Arial, sans-serif; background: #f4f5f7; color: #2
   <div class="charts-bottom">
     <!-- SIZE & WAGE -->
     <div class="panel">
-      <h3>Employer Size &amp; Wage Distribution</h3>
-      <p class="panel-sub">Bar = job listings count &nbsp;|&nbsp; colour = avg hourly rate (yellow&rarr;red = low&rarr;high)</p>
+      <h3>Employer Size &amp; Wage <span class="info-icon" onmouseover="showTip('<strong>Employer size and wage levels</strong><br>Bar height = job count<br>Colour = avg hourly rate', event)" onmouseout="hideTip()">?</span></h3>
       <div class="size-scroll">
         <svg id="size-svg"></svg>
       </div>
@@ -2183,8 +2237,7 @@ body { margin: 0; font-family: Arial, sans-serif; background: #f4f5f7; color: #2
 
     <!-- ACTIVITY -->
     <div class="panel">
-      <h3>Workplace Activity Over Time</h3>
-      <p class="panel-sub">Monthly Workplace check-ins per employer (CheckinJournal). All employers shown as grey lines; selected employer highlighted.</p>
+      <h3>Workplace Activity<span class="info-icon" onmouseover="showTip('<strong>Monthly workplace check-ins</strong><br>Lines show city-wide employer activity. Highlights the selected employer.', event)" onmouseout="hideTip()">?</span></h3>
       <svg id="activity-svg"></svg>
     </div>
   </div>
@@ -2204,6 +2257,12 @@ const scoreColor = d3.scaleSequential(d3.interpolateRdYlGn).domain([0, 1]);
 const tip = d3.select('#tip');
 
 function isVis(d) { return !hiddenCats.has(d.category); }
+
+function showTip(html, ev) {
+  tip.html(html).style('opacity', 1)
+     .style('left', (ev.clientX + 15) + 'px').style('top', (ev.clientY - 45) + 'px');
+}
+function hideTip() { tip.style('opacity', 0); }
 
 function selectEmployer(id) {
   selectedId = (selectedId === id) ? null : id;
@@ -2243,26 +2302,61 @@ function applySelection() {
 function updateDetailsBar() {
   const el = document.getElementById('details-bar');
   if (selectedId == null) {
-    el.innerHTML = 'Click any employer in any chart to see details here.';
-    el.style.color = '#aaa';
+    el.style.justifyContent = 'center';
+    el.innerHTML = '<span style="color:#aaa;font-style:italic">Click any employer in any chart to see deep-dive metrics here.</span>';
     return;
   }
   const d = DATA.employers.find(e => e.id === selectedId);
   if (!d) return;
-  el.style.color = '#333';
-  const col = CAT_COLORS[d.category];
+  
+  el.style.justifyContent = 'space-around';
   const peak = DATA.months.length ? Math.max(...d.activity) : '—';
-  el.innerHTML =
-    `<strong>Employer ${d.id}</strong> &nbsp;` +
-    `<span style="color:${col};font-weight:600">${d.category}</span> &nbsp;|&nbsp; ` +
-    `Score: <strong>${d.score.toFixed(3)}</strong> <em style="color:#aaa">(est.)</em> &nbsp;|&nbsp; ` +
-    `Avg rate: <strong>$${d.avg_rate}/hr</strong> &nbsp;|&nbsp; ` +
-    `Jobs: <strong>${d.job_count}</strong> &nbsp;|&nbsp; ` +
-    `Stable: <strong>${d.stable}</strong> &nbsp;|&nbsp; ` +
-    `Departed: <strong>${d.departed}</strong> Arrived: <strong>${d.arrived}</strong> &nbsp;|&nbsp; ` +
-    `Turnover: <strong>${(d.turnover_rate*100).toFixed(1)}%</strong> &nbsp;|&nbsp; ` +
-    `Peak activity: <strong>${peak}</strong> check-ins &nbsp; ` +
-    `<button class="deselect-btn" onclick="selectEmployer(${d.id})">&#10005; Deselect</button>`;
+  
+  el.innerHTML = `
+    <div class="detail-stat">
+      <span class="detail-label">Employer</span>
+      <span class="detail-value">#${d.id}</span>
+    </div>
+    <div class="detail-stat">
+      <span class="detail-label">Status</span>
+      <span class="detail-val-cat" style="background:${CAT_COLORS[d.category]}">${d.category}</span>
+    </div>
+    <div class="detail-stat">
+      <span class="detail-label">Health Score</span>
+      <span class="detail-value">${d.score.toFixed(3)}</span>
+    </div>
+    <div class="detail-stat">
+      <span class="detail-label">Jobs</span>
+      <span class="detail-value">${d.job_count}</span>
+    </div>
+    <div class="detail-stat">
+      <span class="detail-label">Avg Rate</span>
+      <span class="detail-value">$${d.avg_rate}/hr</span>
+    </div>
+    <div class="detail-stat">
+      <span class="detail-label">Turnover</span>
+      <span class="detail-value">${(d.turnover_rate*100).toFixed(1)}%</span>
+    </div>
+    <div class="detail-stat">
+      <span class="detail-label">Stable</span>
+      <span class="detail-value">${d.stable}</span>
+    </div>
+    <div class="detail-stat">
+      <span class="detail-label">Departed</span>
+      <span class="detail-value" style="color:#d62728">${d.departed}</span>
+    </div>
+    <div class="detail-stat">
+      <span class="detail-label">Arrived</span>
+      <span class="detail-value" style="color:#2ca02c">${d.arrived}</span>
+    </div>
+    <div class="detail-stat">
+      <span class="detail-label">Peak Activity</span>
+      <span class="detail-value">${peak}</span>
+    </div>
+    <div class="detail-stat" style="min-width:auto">
+      <button class="deselect-btn" onclick="selectEmployer(${d.id})" style="margin:0">&#10005;</button>
+    </div>
+  `;
 }
 
 // ── category legend ────────────────────────────────────────
@@ -2325,9 +2419,7 @@ scatterSvg.selectAll('.s-dot').data(DATA.employers).join('circle')
   .attr('fill', d => scoreColor(d.score))
   .attr('stroke','#fff').attr('stroke-width',0.7).attr('opacity',0.85).attr('cursor','pointer')
   .on('mouseover', (event,d) => {
-    tip.style('opacity',1)
-      .html(`<strong>Employer ${d.id}</strong> &mdash; ${d.category}<br>Score: ${d.score.toFixed(3)} <em>(est.)</em><br>Rate: $${d.avg_rate}/hr &nbsp; Jobs: ${d.job_count}<br>Stable: ${d.stable} &nbsp; Turnover: ${(d.turnover_rate*100).toFixed(1)}%<br><em style="color:#aaa">Click to select all charts</em>`)
-      .style('left',(event.clientX+14)+'px').style('top',(event.clientY-50)+'px');
+    showTip(`<strong>Employer ${d.id}</strong><br>${d.category}<br>Score: <strong>${d.score.toFixed(3)}</strong><br>Rate: <strong>$${d.avg_rate}/hr</strong><br>Jobs: <strong>${d.job_count}</strong><br>Stable: <strong>${d.stable}</strong><br>Turnover: <strong>${(d.turnover_rate*100).toFixed(1)}%</strong>`, event);
   })
   .on('mouseout', () => tip.style('opacity',0))
   .on('click', (_,d) => selectEmployer(d.id));
@@ -2366,9 +2458,7 @@ function drawRanking() {
     .attr('width', d=>x(d.score)).attr('height', y.bandwidth())
     .attr('fill', d=>CAT_COLORS[d.category]).attr('rx',2).attr('opacity',0.9).attr('cursor','pointer')
     .on('mouseover',(event,d) => {
-      tip.style('opacity',1)
-        .html(`<strong>Employer ${d.id}</strong> &mdash; ${d.category}<br>Score: ${d.score.toFixed(3)}<br>Rate: $${d.avg_rate}/hr &nbsp; Turnover: ${(d.turnover_rate*100).toFixed(1)}%`)
-        .style('left',(event.clientX+14)+'px').style('top',(event.clientY-36)+'px');
+      showTip(`<strong>Employer ${d.id}</strong><br>${d.category}<br>Score: <strong>${d.score.toFixed(3)}</strong><br>Rate: <strong>$${d.avg_rate}/hr</strong><br>Turnover: <strong>${(d.turnover_rate*100).toFixed(1)}%</strong>`, event);
     })
     .on('mouseout', () => tip.style('opacity',0))
     .on('click', (_,d) => selectEmployer(d.id));
@@ -2410,9 +2500,7 @@ function drawRanking() {
     .attr('width', d=>x(d.job_count)).attr('height', y.bandwidth())
     .attr('fill', d=>rateColor(d.avg_rate)).attr('rx',2).attr('opacity',0.85).attr('cursor','pointer')
     .on('mouseover',(event,d) => {
-      tip.style('opacity',1)
-        .html(`<strong>Employer ${d.id}</strong><br>Job listings: ${d.job_count}<br>Avg rate: $${d.avg_rate}/hr<br>Score: ${d.score.toFixed(3)} &mdash; ${d.category}`)
-        .style('left',(event.clientX+14)+'px').style('top',(event.clientY-36)+'px');
+      showTip(`<strong>Employer ${d.id}</strong><br>Job listings: <strong>${d.job_count}</strong><br>Avg rate: <strong>$${d.avg_rate}/hr</strong><br>Score: <strong>${d.score.toFixed(3)}</strong>`, event);
     })
     .on('mouseout', () => tip.style('opacity',0))
     .on('click', (_,d) => selectEmployer(d.id));
@@ -2461,9 +2549,7 @@ function drawRanking() {
     .attr('stroke','#bbb').attr('stroke-width',1).attr('opacity',0.5)
     .attr('d', d => lineGen(d.activity)).attr('cursor','pointer')
     .on('mouseover',(event,d) => {
-      tip.style('opacity',1)
-        .html(`<strong>Employer ${d.id}</strong> &mdash; ${d.category}<br>Peak: ${d3.max(d.activity)} check-ins<br>Score: ${d.score.toFixed(3)}<br><em style="color:#aaa">Click to select all charts</em>`)
-        .style('left',(event.clientX+14)+'px').style('top',(event.clientY-50)+'px');
+      showTip(`<strong>Employer ${d.id}</strong><br>${d.category}<br>Peak: <strong>${d3.max(d.activity)}</strong> check-ins<br>Score: <strong>${d.score.toFixed(3)}</strong>`, event);
     })
     .on('mouseout', () => tip.style('opacity',0))
     .on('click', (_,d) => selectEmployer(d.id));
@@ -2683,15 +2769,22 @@ body{font-family:Arial,sans-serif;background:#f4f5f7;color:#222;padding:16px}
 .kpi-card{background:#fff;border-radius:10px;padding:14px;box-shadow:0 1px 5px rgba(0,0,0,.1)}
 .kpi-label{font-size:11px;color:#777;margin-bottom:6px}
 .kpi-value{font-size:18px;font-weight:bold}
-.details-bar{background:#e7eef7;border-left:4px solid #2f5d8c;border-radius:6px;padding:8px 14px;
-  font-size:12px;color:#333;margin-bottom:14px;min-height:34px;line-height:1.6}
+.details-bar{background:#fff;border-radius:10px;padding:12px 16px;box-shadow:0 1px 5px rgba(0,0,0,.1);color:#aaa;
+  margin-bottom:14px;min-height:64px;display:flex;align-items:center;justify-content:center;gap:20px;flex-wrap:wrap}
+.detail-stat{display:flex;flex-direction:column;align-items:center;min-width:70px}
+.detail-label{font-size:10px;color:#777;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:5px}
+.detail-value{font-size:15px;font-weight:bold;color:#2f5d8c}
+.detail-val-cat{padding:2px 8px;border-radius:12px;color:#fff;font-size:11px;font-weight:bold}
 .chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
 .chart-panel{background:#fff;border-radius:10px;padding:14px;box-shadow:0 1px 5px rgba(0,0,0,.1)}
 .chart-panel h3{font-size:14px;margin-bottom:3px}
 .chart-note{font-size:11px;color:#777;margin-bottom:10px}
+.info-icon{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;
+  background:#2f5d8c;color:#fff;border-radius:50%;font-size:9px;margin-left:6px;cursor:help;vertical-align:middle}
 .ranking-wrap{overflow-y:auto;max-height:320px}
-.tooltip{position:fixed;background:rgba(20,20,20,.92);color:#fff;padding:7px 11px;border-radius:6px;
-  font-size:12px;pointer-events:none;opacity:0;transition:opacity .12s;line-height:1.6;z-index:999}
+.tooltip { position: fixed; background: rgba(20, 20, 20, 0.92); color: #fff; padding: 8px 12px;
+  border-radius: 6px; font-size: 12px; pointer-events: none; opacity: 0;
+  transition: opacity 0.12s; line-height: 1.6; z-index: 1000; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
 @media(max-width:800px){.kpi-grid{grid-template-columns:repeat(3,1fr)}.chart-grid{grid-template-columns:1fr}}
 </style>
 </head>
@@ -2710,23 +2803,19 @@ body{font-family:Arial,sans-serif;background:#f4f5f7;color:#222;padding:16px}
 
 <div class="chart-grid">
   <div class="chart-panel">
-    <h3>Wages vs Cost of Living Over Time</h3>
-    <p class="chart-note">Monthly totals: wage income, cost of living, net income</p>
+    <h3>Cost of Living Gap <span class="info-icon" onmouseover="showTip('<strong>Monthly city-wide totals</strong><br>Compares total wage income, cost of living expenses, and resulting net income.', event)" onmouseout="hideTip()">?</span></h3>
     <div id="ch-line"></div>
   </div>
   <div class="chart-panel">
-    <h3>Employer Health Ranking</h3>
-    <p class="chart-note">Sorted by derived health score. Click to highlight across charts.</p>
+    <h3>Employer Health Ranking <span class="info-icon" onmouseover="showTip('<strong>Employer prosperity ranking</strong><br>Sorted by derived health score.', event)" onmouseout="hideTip()">?</span></h3>
     <div class="ranking-wrap"><div id="ch-ranking"></div></div>
   </div>
   <div class="chart-panel">
-    <h3>Business Prosperity / Stability Scatterplot</h3>
-    <p class="chart-note">Avg hourly rate vs job count. Dot size = stable workers.</p>
+    <h3>Business Prosperity / Stability <span class="info-icon" onmouseover="showTip('<strong>Wages vs Jobs</strong><br>X-axis: Avg hourly rate.<br>Y-axis: Job count.<br>Dot size: number of stable workers.', event)" onmouseout="hideTip()">?</span></h3>
     <div id="ch-scatter"></div>
   </div>
   <div class="chart-panel">
-    <h3>Employer Symbol Map</h3>
-    <p class="chart-note">Position = location. Size = job count. Color = health category.</p>
+    <h3>Employer Map <span class="info-icon" onmouseover="showTip('<strong>Geographical distribution of employers</strong><br>Position: building location.<br>Size: job count.<br>Color: prosperity health category.', event)" onmouseout="hideTip()">?</span></h3>
     <div id="ch-map"></div>
   </div>
 </div>
@@ -2753,9 +2842,9 @@ let selectedId = null;
 let mapZoom = null;
 let mapTransform = d3.zoomIdentity;
 
-function showTip(html, ev){
-  tip.html(html).style('opacity',1)
-    .style('left',(ev.clientX+14)+'px').style('top',(ev.clientY-40)+'px');
+function showTip(html, ev) {
+  tip.html(html).style('opacity', 1)
+     .style('left', (ev.clientX + 15) + 'px').style('top', (ev.clientY - 45) + 'px');
 }
 function hideTip(){ tip.style('opacity',0); }
 
@@ -2769,18 +2858,53 @@ function selectEmployer(id){
 
 function updateDetails(){
   const bar = document.getElementById('details-bar');
-  if(!selectedId){ bar.textContent='Click any employer in the ranking, scatter, or map to see details here.'; return; }
+  if(!selectedId){ 
+    bar.style.justifyContent = 'center';
+    bar.innerHTML = '<span style="color:#aaa;font-style:italic">Click any employer in the ranking, scatter, or map to see deep-dive metrics here.</span>'; 
+    return; 
+  }
   const e = DATA.employers.find(d=>d.id===selectedId);
   if(!e) return;
-  bar.innerHTML = `<strong>Employer ${e.id}</strong> &nbsp;|&nbsp;
-    Category: <strong style="color:${CAT_COLOR[e.category]}">${e.category}</strong> &nbsp;|&nbsp;
-    Score: <strong>${e.score}</strong> &nbsp;|&nbsp;
-    Jobs: <strong>${e.job_count}</strong> &nbsp;|&nbsp;
-    Avg rate: <strong>$${e.avg_rate}/hr</strong> &nbsp;|&nbsp;
-    Turnover: <strong>${(e.turnover_rate*100).toFixed(1)}%</strong> &nbsp;|&nbsp;
-    Stable: <strong>${e.stable}</strong> &nbsp;|&nbsp;
-    Departed: <strong>${e.departed}</strong> &nbsp;|&nbsp;
-    Arrived: <strong>${e.arrived}</strong>`;
+  
+  bar.style.justifyContent = 'space-around';
+  bar.innerHTML = `
+    <div class="detail-stat">
+      <span class="detail-label">Employer</span>
+      <span class="detail-value">#${e.id}</span>
+    </div>
+    <div class="detail-stat">
+      <span class="detail-label">Status</span>
+      <span class="detail-val-cat" style="background:${CAT_COLOR[e.category]}">${e.category}</span>
+    </div>
+    <div class="detail-stat">
+      <span class="detail-label">Health Score</span>
+      <span class="detail-value">${e.score.toFixed(3)}</span>
+    </div>
+    <div class="detail-stat">
+      <span class="detail-label">Jobs</span>
+      <span class="detail-value">${e.job_count}</span>
+    </div>
+    <div class="detail-stat">
+      <span class="detail-label">Avg Rate</span>
+      <span class="detail-value">$${e.avg_rate}/hr</span>
+    </div>
+    <div class="detail-stat">
+      <span class="detail-label">Turnover</span>
+      <span class="detail-value">${(e.turnover_rate*100).toFixed(1)}%</span>
+    </div>
+    <div class="detail-stat">
+      <span class="detail-label">Stable</span>
+      <span class="detail-value">${e.stable}</span>
+    </div>
+    <div class="detail-stat">
+      <span class="detail-label">Departed</span>
+      <span class="detail-value" style="color:#d62728">${e.departed}</span>
+    </div>
+    <div class="detail-stat">
+      <span class="detail-label">Arrived</span>
+      <span class="detail-value" style="color:#2ca02c">${e.arrived}</span>
+    </div>
+  `;
 }
 
 // ── Line chart (standalone — no employer selection) ─────────────────────
@@ -2842,7 +2966,7 @@ function drawRanking(){
     .attr('opacity',d=>!selectedId||selectedId===d.id ? 0.85 : 0.2)
     .attr('stroke',d=>selectedId===d.id?'#222':'none').attr('stroke-width',1.5)
     .style('cursor','pointer')
-    .on('mouseover',(ev,d)=>showTip(`Employer ${d.id}<br>${d.category}<br>Score: ${d.score}<br>Jobs: ${d.job_count}`,ev))
+    .on('mouseover',(ev,d)=>showTip(`<strong>Employer ${d.id}</strong><br>${d.category}<br>Score: <strong>${d.score}</strong><br>Jobs: <strong>${d.job_count}</strong>`,ev))
     .on('mouseout',hideTip)
     .on('click',(_,d)=>selectEmployer(d.id));
 
@@ -2884,7 +3008,7 @@ function drawScatter(){
     .attr('stroke',d=>selectedId===d.id?'#222':'#fff')
     .attr('stroke-width',d=>selectedId===d.id?2:0.5)
     .style('cursor','pointer')
-    .on('mouseover',(ev,d)=>showTip(`Employer ${d.id}<br>${d.category}<br>Rate: $${d.avg_rate}/hr<br>Jobs: ${d.job_count}<br>Stable: ${d.stable}`,ev))
+    .on('mouseover',(ev,d)=>showTip(`<strong>Employer ${d.id}</strong><br>${d.category}<br>Rate: <strong>$${d.avg_rate}/hr</strong><br>Jobs: <strong>${d.job_count}</strong><br>Stable: <strong>${d.stable}</strong>`,ev))
     .on('mouseout',hideTip)
     .on('click',(_,d)=>selectEmployer(d.id));
 }
@@ -2930,7 +3054,7 @@ function drawMap(){
 		.attr('stroke',d=>selectedId===d.id?'#222':'#fff')
 		.attr('stroke-width',d=>selectedId===d.id?2:0.5)
 		.style('cursor','pointer')
-		.on('mouseover',(ev,d)=>showTip(`Employer ${d.id}<br>${d.category}<br>Jobs: ${d.job_count}<br>Rate: $${d.avg_rate}/hr`,ev))
+		.on('mouseover',(ev,d)=>showTip(`<strong>Employer ${d.id}</strong><br>${d.category}<br>Jobs: <strong>${d.job_count}</strong><br>Rate: <strong>$${d.avg_rate}/hr</strong>`,ev))
 		.on('mouseout',hideTip)
 		.on('click',(_,d)=>selectEmployer(d.id));
 
@@ -3156,78 +3280,87 @@ def resident_financial_page():
     return html, 200, {"Content-Type": "text/html; charset=utf-8"}
 
 
-@app.route('/api/employer_summary', methods=['GET'])
+@app.route("/api/employer_summary", methods=["GET"])
 def api_employer_summary():
-	"""Return precomputed employer summary JSON (if present).
+    """Return precomputed employer summary JSON (if present).
 
-	This serves `backend/employer_health_summary.json` for the frontend to
-	enrich employer sidecards without requiring the full embedded HTML.
-	"""
-	try:
-		import json
-		from pathlib import Path
-		summary_path = Path(__file__).resolve().parent / 'employer_health_summary.json'
-		if not summary_path.exists():
-			return jsonify({'error': 'summary not available'}), 404
-		with open(summary_path, 'r', encoding='utf-8') as f:
-			data = json.load(f)
-		return jsonify(data)
-	except Exception as exc:
-		return jsonify({'error': str(exc)}), 500
+    This serves `backend/employer_health_summary.json` for the frontend to
+    enrich employer sidecards without requiring the full embedded HTML.
+    """
+    try:
+        import json
+        from pathlib import Path
+
+        summary_path = Path(__file__).resolve().parent / "employer_health_summary.json"
+        if not summary_path.exists():
+            return jsonify({"error": "summary not available"}), 404
+        with open(summary_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return jsonify(data)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
 
 
-@app.route('/api/employers', methods=['GET'])
+@app.route("/api/employers", methods=["GET"])
 def api_employers():
-	"""Return a lightweight list of employers for the frontend.
+    """Return a lightweight list of employers for the frontend.
 
-	Prefer the precomputed `employer_health_summary.json` when present; if not,
-	query the database for basic fields (employerId, job count, avg rate).
-	"""
-	try:
-		import json
-		from pathlib import Path
+    Prefer the precomputed `employer_health_summary.json` when present; if not,
+    query the database for basic fields (employerId, job count, avg rate).
+    """
+    try:
+        import json
+        from pathlib import Path
 
-		summary_path = Path(__file__).resolve().parent / 'employer_health_summary.json'
-		if summary_path.exists():
-			with open(summary_path, 'r', encoding='utf-8') as f:
-				raw = json.load(f)
-			out = []
-			for e in raw:
-				eid = e.get('employerId')
-				out.append({
-					'id': eid,
-					'employerId': eid,
-					'name': e.get('name') or f"Employer {eid}",
-					'job_count': e.get('JobCount') or e.get('JobCount', 0),
-					'avg_rate': e.get('AverageHourlyRate') or e.get('avg_rate'),
-					'sector': e.get('Sector') or e.get('sector'),
-				})
-			return jsonify(out)
+        summary_path = Path(__file__).resolve().parent / "employer_health_summary.json"
+        if summary_path.exists():
+            with open(summary_path, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+            out = []
+            for e in raw:
+                eid = e.get("employerId")
+                out.append(
+                    {
+                        "id": eid,
+                        "employerId": eid,
+                        "name": e.get("name") or f"Employer {eid}",
+                        "job_count": e.get("JobCount") or e.get("JobCount", 0),
+                        "avg_rate": e.get("AverageHourlyRate") or e.get("avg_rate"),
+                        "sector": e.get("Sector") or e.get("sector"),
+                    }
+                )
+            return jsonify(out)
 
-		# fallback to DB
-		conn = _get_db_connection()
-		try:
-			rows = conn.execute(
-				"SELECT e.employerId AS employerId, COUNT(j.rowid) AS job_count, AVG(j.hourlyRate) AS avg_rate "
-				"FROM employers e LEFT JOIN jobs j ON e.employerId = j.employerId "
-				"GROUP BY e.employerId"
-			).fetchall()
-			out = []
-			for r in rows:
-				eid = int(r['employerId'])
-				out.append({
-					'id': eid,
-					'employerId': eid,
-					'name': f"Employer {eid}",
-					'job_count': int(r['job_count']) if r['job_count'] is not None else 0,
-					'avg_rate': float(r['avg_rate']) if r['avg_rate'] is not None else None,
-				})
-			return jsonify(out)
-		finally:
-			conn.close()
+        # fallback to DB
+        conn = _get_db_connection()
+        try:
+            rows = conn.execute(
+                "SELECT e.employerId AS employerId, COUNT(j.rowid) AS job_count, AVG(j.hourlyRate) AS avg_rate "
+                "FROM employers e LEFT JOIN jobs j ON e.employerId = j.employerId "
+                "GROUP BY e.employerId"
+            ).fetchall()
+            out = []
+            for r in rows:
+                eid = int(r["employerId"])
+                out.append(
+                    {
+                        "id": eid,
+                        "employerId": eid,
+                        "name": f"Employer {eid}",
+                        "job_count": int(r["job_count"])
+                        if r["job_count"] is not None
+                        else 0,
+                        "avg_rate": float(r["avg_rate"])
+                        if r["avg_rate"] is not None
+                        else None,
+                    }
+                )
+            return jsonify(out)
+        finally:
+            conn.close()
 
-	except Exception as exc:
-		return jsonify({'error': str(exc)}), 500
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
 
 
 def _render_resident_financial_html(data: dict) -> str:
@@ -3240,8 +3373,16 @@ def _render_resident_financial_html(data: dict) -> str:
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:Arial,sans-serif;background:#f4f5f7;color:#222;padding:16px}
-.info-box{background:#e7eef7;border-left:4px solid #2f5d8c;border-radius:6px;
-  padding:8px 14px;font-size:12px;color:#333;margin-bottom:14px;min-height:32px;line-height:1.6}
+.info-box { background: #fff; border-radius: 10px; padding: 12px 16px; box-shadow: 0 1px 5px rgba(0,0,0,.1);color:#aaa;
+  margin-bottom: 14px; min-height: 64px; display: flex; align-items: center; justify-content: center; gap: 20px; flex-wrap: wrap; }
+.detail-stat { display: flex; flex-direction: column; align-items: center; min-width: 80px; }
+.detail-label { font-size: 10px; color: #777; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 5px; }
+.detail-value { font-size: 15px; font-weight: bold; color: #2f5d8c; }
+.detail-val-edu { padding: 2px 10px; border-radius: 12px; color: #fff; font-size: 11px; font-weight: bold; }
+.deselect-btn { font-size: 12px; padding: 4px 8px; cursor: pointer; border: 1px solid #ddd; border-radius: 4px; background: #fff; margin-left: 10px; }
+.deselect-btn:hover { background: #f5f5f5; }
+.info-icon{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;
+  background:#2f5d8c;color:#fff;border-radius:50%;font-size:9px;margin-left:6px;cursor:help;vertical-align:middle}
 .chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}
 .chart-panel{background:#fff;border-radius:10px;padding:14px;
   box-shadow:0 1px 5px rgba(0,0,0,.1)}
@@ -3252,9 +3393,9 @@ body{font-family:Arial,sans-serif;background:#f4f5f7;color:#222;padding:16px}
 .legend{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:8px;font-size:11px}
 .leg-item{display:flex;align-items:center;gap:4px;cursor:pointer}
 .leg-dot{width:10px;height:10px;border-radius:50%}
-.tooltip{position:fixed;background:rgba(20,20,20,.92);color:#fff;padding:7px 11px;
-  border-radius:6px;font-size:12px;pointer-events:none;opacity:0;
-  transition:opacity .12s;line-height:1.6;z-index:999}
+.tooltip { position: fixed; background: rgba(20, 20, 20, 0.92); color: #fff; padding: 8px 12px;
+  border-radius: 6px; font-size: 12px; pointer-events: none; opacity: 0;
+  transition: opacity 0.12s; line-height: 1.6; z-index: 1000; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
 @media(max-width:800px){.chart-grid{grid-template-columns:1fr}}
 </style>
 </head>
@@ -3267,30 +3408,25 @@ body{font-family:Arial,sans-serif;background:#f4f5f7;color:#222;padding:16px}
 
 <div class="chart-grid">
   <div class="chart-panel">
-    <h3>Financial Categories Over Time</h3>
-    <p class="chart-note">Monthly totals by category from FinancialJournal</p>
+    <h3>Financial Categories <span class="info-icon" onmouseover="showTip('<strong>Expense trends</strong><br>Monthly totals by category from FinancialJournal.', event)" onmouseout="hideTip()">?</span></h3>
     <div id="ch-cats"></div>
   </div>
   <div class="chart-panel">
-    <h3>Wages vs Cost of Living</h3>
-    <p class="chart-note">Monthly wage income, living costs, and net income</p>
+    <h3>Wages vs Cost of Living <span class="info-icon" onmouseover="showTip('<strong>Income vs Spending</strong><br>Monthly wage income, living costs, and net income.', event)" onmouseout="hideTip()">?</span></h3>
     <div id="ch-wc"></div>
   </div>
   <div class="chart-panel">
-    <h3>Net Income Distribution</h3>
-    <p class="chart-note">Histogram of per-participant net income over the study period</p>
+    <h3>Net Income <span class="info-icon" onmouseover="showTip('<strong>Study period totals</strong><br>Histogram of per-participant net income over the study period.', event)" onmouseout="hideTip()">?</span></h3>
     <div id="ch-hist"></div>
   </div>
   <div class="chart-panel">
-    <h3>Net Income by Education Group</h3>
-    <p class="chart-note">Avg wage, expenses, net income per education level. Click a group to highlight in parallel coords.</p>
+    <h3>Net Income by Education Group <span class="info-icon" onmouseover="showTip('<strong>Educational demographics</strong><br>Avg wage, expenses, net income per education level. <br>Click a group to highlight in parallel coords.', event)" onmouseout="hideTip()">?</span></h3>
     <div id="ch-groups"></div>
   </div>
 </div>
 
 <div class="chart-panel full">
-  <h3>Resident Financial Profiles (Parallel Coordinates)</h3>
-  <p class="chart-note">Each line = one participant. Color = education level. Click a group above to highlight.</p>
+  <h3>Resident Financial Profiles <span class="info-icon" onmouseover="showTip('<strong>Participant deep-dive</strong><br>Each line = one participant. <br>Color = education level.<br> Click a group above to highlight.', event)" onmouseout="hideTip()">?</span></h3>
   <div class="legend" id="pc-legend"></div>
   <div id="ch-pc"></div>
 </div>
@@ -3311,9 +3447,9 @@ const EDU_COLOR = {
 };
 const CAT_COLORS = d3.schemeTableau10;
 
-function showTip(html, ev){
-  tip.html(html).style('opacity',1)
-    .style('left',(ev.clientX+14)+'px').style('top',(ev.clientY-40)+'px');
+function showTip(html, ev) {
+  tip.html(html).style('opacity', 1)
+     .style('left', (ev.clientX + 15) + 'px').style('top', (ev.clientY - 45) + 'px');
 }
 function hideTip(){ tip.style('opacity',0); }
 
@@ -3428,7 +3564,7 @@ function drawGroups(){
       .style('cursor','pointer')
       .on('mouseover',(ev,grp,j)=>{
         const i=groups.indexOf(grp);
-        showTip(`${grp}<br>${s.name}: $${s.values[i].toLocaleString()}`,ev);
+        showTip(`<strong>${grp}</strong><br>${s.name}: <strong>$${s.values[i].toLocaleString()}</strong>`,ev);
       })
       .on('mouseout',hideTip)
       .on('click',(_,grp)=>{
@@ -3460,13 +3596,42 @@ function drawGroups(){
 
 function updateGroupSelection(){
   const box = document.getElementById('info-box');
-  if(selectedGroup){
-    box.innerHTML=`Selected: <strong style="color:${EDU_COLOR[selectedGroup]||'#2f5d8c'}">${selectedGroup}</strong>
-      — showing matching participants in parallel coordinates.
-      <span style="cursor:pointer;color:#2f5d8c;margin-left:8px" onclick="selectedGroup=null;updateGroupSelection()">✕ clear</span>`;
-  } else {
-    box.innerHTML='Click an education level in the <strong>Net Income by Group</strong> chart to highlight matching participants in the <strong>Resident Financial Profiles</strong> below.';
+  if(!selectedGroup){
+    box.style.justifyContent = 'center';
+    box.innerHTML = '<span style="color:#aaa;font-style:italic">Click an education level in the <strong>Net Income by Group</strong> chart to deep-dive into demographic stats.</span>';
+    drawGroups();
+    drawParallelCoords();
+    return;
   }
+  
+  const gIdx = DATA.groups.groups.indexOf(selectedGroup);
+  const wage = DATA.groups.series[0].values[gIdx];
+  const col  = DATA.groups.series[1].values[gIdx];
+  const net  = DATA.groups.series[2].values[gIdx];
+  
+  box.style.justifyContent = 'space-around';
+  box.innerHTML = `
+    <div class="detail-stat">
+      <span class="detail-label">Education Group</span>
+      <span class="detail-val-edu" style="background:${EDU_COLOR[selectedGroup]}">${selectedGroup}</span>
+    </div>
+    <div class="detail-stat">
+      <span class="detail-label">Avg Wage</span>
+      <span class="detail-value" style="color:#2ca02c">$${wage.toLocaleString()}</span>
+    </div>
+    <div class="detail-stat">
+      <span class="detail-label">Avg Expenses</span>
+      <span class="detail-value" style="color:#d62728">$${col.toLocaleString()}</span>
+    </div>
+    <div class="detail-stat">
+      <span class="detail-label">Avg Net Income</span>
+      <span class="detail-value" style="color:#1f77b4">$${net.toLocaleString()}</span>
+    </div>
+    <div class="detail-stat" style="min-width:auto">
+      <button class="deselect-btn" onclick="selectedGroup=null;updateGroupSelection()">&#10005;</button>
+    </div>
+  `;
+  
   drawGroups();
   drawParallelCoords();
 }
@@ -3504,9 +3669,9 @@ function drawParallelCoords(){
     .attr('stroke-width',0.7)
     .attr('opacity',d=>!selectedGroup||selectedGroup===d.edu?0.35:0.04)
     .on('mouseover',(ev,d)=>showTip(
-      `Edu: ${d.edu}<br>Wage: $${d.total_wage?.toLocaleString()}<br>`+
-      `Expenses: $${d.total_expenses?.toLocaleString()}<br>Net: $${d.net_income?.toLocaleString()}<br>`+
-      `Age: ${d.age} | Joviality: ${d.joviality}`,ev))
+      `<strong>Edu: ${d.edu}</strong><br>Wage: <strong>$${d.total_wage?.toLocaleString()}</strong><br>`+
+      `Expenses: <strong>$${d.total_expenses?.toLocaleString()}</strong><br>Net: <strong>$${d.net_income?.toLocaleString()}</strong><br>`+
+      `Age: <strong>${d.age}</strong> | Joviality: <strong>${d.joviality.toFixed(2)}</strong>`,ev))
     .on('mouseout',hideTip);
 
   // Axes
@@ -3546,25 +3711,12 @@ drawParallelCoords();
 
 @app.route("/api/employment-page", methods=["GET"])
 def employment_page():
-    """Combined Employment & Turnover dashboard: 4 charts in one page."""
+    """Combined Employment & Turnover dashboard: Only Workforce participation remain."""
     if not DB_PATH.exists():
         return jsonify({"error": f"Database not found: {DB_PATH}"}), 404
 
     conn = _get_db_connection()
     try:
-        # ── 1. Turnover ranking ────────────────────────────────────────────
-        start_df, end_df = _get_job_transitions(conn)
-
-        # ── 2. Small multiples ─────────────────────────────────────────────
-        sm_df = pd.read_sql_query(
-            """SELECT strftime('%Y-%m', timestamp) AS month,
-			          venueId AS employerId,
-			          COUNT(DISTINCT participantId) AS workers
-			   FROM checkinjournal WHERE venueType='Workplace'
-			   GROUP BY month, venueId ORDER BY month, venueId""",
-            conn,
-        )
-
         # ── 3. Workforce participation ─────────────────────────────────────
         wf_df = pd.read_sql_query(
             """SELECT strftime('%Y-%m', timestamp) AS month,
@@ -3574,132 +3726,8 @@ def employment_page():
 			   GROUP BY month ORDER BY month""",
             conn,
         )
-
-        # ── 4. Job transitions sankey ──────────────────────────────────────
-        tbl_rows = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'participantstatuslogs%'"
-        ).fetchall()
-        tables = sorted(
-            [r[0] for r in tbl_rows],
-            key=lambda t: int(re.search(r"(\d+)$", t).group(1)),
-        )
-
-        sankey_nodes, sankey_links = [], []
-        if len(tables) >= 2:
-            jobs_edu = pd.read_sql_query(
-                "SELECT jobId, educationRequirement FROM jobs WHERE educationRequirement IS NOT NULL",
-                conn,
-            )
-
-            def dominant_sector(tbl: str) -> pd.DataFrame:
-                df = pd.read_sql_query(
-                    f"""SELECT participantId, jobId, COUNT(*) AS cnt
-					    FROM "{tbl}"
-					    WHERE jobId IS NOT NULL
-					      AND TRIM(CAST(jobId AS TEXT)) NOT IN ('','N/A','nan')
-					    GROUP BY participantId, jobId""",
-                    conn,
-                )
-                if df.empty:
-                    return pd.DataFrame(
-                        columns=["participantId", "educationRequirement"]
-                    )
-                top = (
-                    df.sort_values("cnt", ascending=False)
-                    .groupby("participantId")
-                    .first()
-                    .reset_index()[["participantId", "jobId"]]
-                )
-                top["jobId"] = pd.to_numeric(top["jobId"], errors="coerce")
-                return top.merge(jobs_edu, on="jobId", how="left")[
-                    ["participantId", "educationRequirement"]
-                ].dropna()
-
-            start_s = dominant_sector(tables[0])
-            end_s = dominant_sector(tables[-1])
-
-            if not start_s.empty and not end_s.empty:
-                merged_s = start_s.merge(
-                    end_s, on="participantId", suffixes=("_start", "_end")
-                )
-                flows = (
-                    merged_s.groupby(
-                        ["educationRequirement_start", "educationRequirement_end"]
-                    )
-                    .size()
-                    .reset_index(name="count")
-                )
-                edu_order = ["Low", "HighSchoolOrCollege", "Bachelors", "Graduate"]
-                left_lbls = [
-                    f"{e} (Start)"
-                    for e in edu_order
-                    if e in flows["educationRequirement_start"].values
-                ]
-                right_lbls = [
-                    f"{e} (End)"
-                    for e in edu_order
-                    if e in flows["educationRequirement_end"].values
-                ]
-                all_lbls = left_lbls + [l for l in right_lbls if l not in left_lbls]
-                node_idx = {lbl: i for i, lbl in enumerate(all_lbls)}
-                sankey_nodes = [{"id": i, "name": lbl} for lbl, i in node_idx.items()]
-                sankey_links = [
-                    {
-                        "source": node_idx[
-                            f"{r['educationRequirement_start']} (Start)"
-                        ],
-                        "target": node_idx[f"{r['educationRequirement_end']} (End)"],
-                        "value": int(r["count"]),
-                    }
-                    for _, r in flows.iterrows()
-                    if f"{r['educationRequirement_start']} (Start)" in node_idx
-                    and f"{r['educationRequirement_end']} (End)" in node_idx
-                ]
     finally:
         conn.close()
-
-    # ── Build turnover records ─────────────────────────────────────────────
-    turnover = []
-    if not start_df.empty and not end_df.empty:
-        all_emp = set(start_df["employerId"].dropna().astype(int)) | set(
-            end_df["employerId"].dropna().astype(int)
-        )
-        for emp in all_emp:
-            sp = set(start_df[start_df["employerId"] == emp]["participantId"])
-            ep = set(end_df[end_df["employerId"] == emp]["participantId"])
-            dep = len(sp - ep)
-            arr = len(ep - sp)
-            stb = len(sp & ep)
-            turnover.append(
-                {
-                    "id": int(emp),
-                    "departed": dep,
-                    "arrived": arr,
-                    "stable": stb,
-                    "total": max(len(sp), 1),
-                    "count": dep + arr,
-                    "rate": round((dep + arr) / max(len(sp), 1), 3),
-                }
-            )
-        turnover = sorted(turnover, key=lambda x: x["count"], reverse=True)[:60]
-
-    # ── Build small multiples ──────────────────────────────────────────────
-    sm_data = {"months": [], "panels": []}
-    if not sm_df.empty:
-        months_sm = sorted(sm_df["month"].unique().tolist())
-        top_n = 16
-        totals = sm_df.groupby("employerId")["workers"].sum().nlargest(top_n)
-        panels = []
-        for eid in totals.index:
-            sub = sm_df[sm_df["employerId"] == eid].set_index("month")["workers"]
-            panels.append(
-                {
-                    "id": int(eid),
-                    "total": int(totals[eid]),
-                    "values": [int(sub.get(m, 0)) for m in months_sm],
-                }
-            )
-        sm_data = {"months": months_sm, "panels": panels}
 
     # ── Build workforce data ───────────────────────────────────────────────
     wf_data = {"months": [], "series": []}
@@ -3721,10 +3749,7 @@ def employment_page():
         }
 
     data = {
-        "turnover": turnover,
-        "small_multiples": sm_data,
         "workforce": wf_data,
-        "sankey": {"nodes": sankey_nodes, "links": sankey_links},
     }
     html = _render_employment_html(data)
     return html, 200, {"Content-Type": "text/html; charset=utf-8"}
@@ -3732,92 +3757,6 @@ def employment_page():
 
 @app.route("/api/job_transitions", methods=["GET"])
 def get_job_transitions():
-<<<<<<< HEAD
-	"""Get job transitions data for sankey visualization."""
-	try:
-		import json
-		from pathlib import Path
-
-		# Load job_changes.json
-		job_changes_path = Path(__file__).resolve().parent / "job_changes.json"
-		if not job_changes_path.exists():
-			return jsonify({"error": "job_changes.json not found"}), 404
-		
-		with open(job_changes_path, 'r') as f:
-			job_changes = json.load(f)
-		
-		# Load employer data from database to get employer names
-		conn = _get_db_connection()
-		employer_df = pd.read_sql_query(
-			"""
-			SELECT DISTINCT employerId 
-			FROM jobs
-			ORDER BY employerId
-			""",
-			conn
-		)
-		conn.close()
-		
-		# Build employer ID to name mapping
-		employer_map = {int(row['employerId']): f"Employer {row['employerId']}" for _, row in employer_df.iterrows()}
-		
-		# Process job_changes.json to extract all transitions
-		links = []
-		all_employers = set()
-		
-		for participant_id, transitions in job_changes.items():
-			for transition in transitions:
-				source = int(transition['source'])
-				target = int(transition['target'])
-				all_employers.add(source)
-				all_employers.add(target)
-				links.append({
-					'source': source,
-					'target': target,
-					'value': 1
-				})
-		
-		# Aggregate links by source and target
-		link_dict = {}
-		for link in links:
-			key = (link['source'], link['target'])
-			link_dict[key] = link_dict.get(key, 0) + 1
-		
-		# Convert to list of links with aggregated values
-		aggregated_links = [
-			{'source': src, 'target': tgt, 'value': count}
-			for (src, tgt), count in link_dict.items()
-		]
-		
-		# Only keep employers that have at least one transition
-		employers_with_transitions = set()
-		for link in aggregated_links:
-			employers_with_transitions.add(link['source'])
-			employers_with_transitions.add(link['target'])
-		
-		# Create nodes list with only employers that have transitions
-		nodes = [
-			{
-				'id': emp_id,
-				'name': employer_map.get(emp_id, f"Employer {emp_id}")
-			}
-			for emp_id in sorted(employers_with_transitions)
-		]
-		
-		# Keep links with original employer IDs (not indices)
-		links_with_ids = [
-			{'source': link['source'], 'target': link['target'], 'value': link['value']}
-			for link in aggregated_links
-		]
-		
-		return jsonify({
-			'nodes': nodes,
-			'links': links_with_ids
-		})
-	
-	except Exception as exc:
-		return jsonify({"error": f"Failed to load job transitions: {exc}"}), 500
-=======
     """Get job transitions data for interactive map visualization."""
     try:
         import json
@@ -3901,106 +3840,168 @@ def get_job_transitions():
 
     except Exception as exc:
         return jsonify({"error": f"Failed to load job transitions: {exc}"}), 500
->>>>>>> 3c330ec (Solve CORS Issue on the backend requests)
 
 
-@app.route('/api/employer_financials_timeline/<int:employer_id>', methods=['GET'])
+@app.route("/api/employer_financials_timeline/<int:employer_id>", methods=["GET"])
 def api_employer_financials_timeline(employer_id: int):
-	"""Return revenue and profit over time for a specific employer."""
-	try:
-		conn = _get_db_connection()
-		cursor = conn.cursor()
-		
-		# Get jobs for this employer
-		cursor.execute("SELECT jobId, hourlyRate FROM jobs WHERE employerId = ?", (employer_id,))
-		jobs = {row[0]: row[1] for row in cursor.fetchall()}
-		
-		if not jobs:
-			conn.close()
-			return jsonify({"error": f"No jobs found for employer {employer_id}"}), 404
-		
-		job_ids = tuple(jobs.keys())
-		avg_hourly_rate = sum(jobs.values()) / len(jobs)
-		
-		# Query all participant logs for complete coverage
-		cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'participantstatuslogs%' ORDER BY SUBSTR(name, 19)")
-		table_names = [row[0] for row in cursor.fetchall()]
-		
-		timeline_data = {}
-		for table_name in table_names:
-			placeholders = ','.join('?' * len(job_ids))
-			query = f"SELECT DATE(timestamp) as d, COUNT(DISTINCT participantId) as c FROM {table_name} WHERE jobId IN ({placeholders}) GROUP BY d"
-			try:
-				cursor.execute(query, job_ids)
-				for work_date, emp_count in cursor.fetchall():
-					if work_date:
-						timeline_data[work_date] = timeline_data.get(work_date, 0) + emp_count
-			except:
-				pass
-		
-		if not timeline_data:
-			conn.close()
-			return jsonify({'employer_id': employer_id, 'total_jobs': len(jobs), 'weekly': [], 'monthly': [], 'summary': {}})
-		
-		# Calculate financials
-		hours_per_day = 8
-		weekly_data = {}
-		monthly_data = {}
-		
-		for work_date in sorted(timeline_data.keys()):
-			emp_count = timeline_data[work_date]
-			daily_revenue = emp_count * avg_hourly_rate * hours_per_day
-			payroll = daily_revenue * 0.6
-			operating = daily_revenue * 0.3
-			profit = daily_revenue - payroll - operating
-			
-			date_obj = pd.to_datetime(work_date)
-			week_key = date_obj.strftime('%Y-W%U')
-			month_key = date_obj.strftime('%Y-%m')
-			
-			# Weekly
-			if week_key not in weekly_data:
-				weekly_data[week_key] = {'week': week_key, 'employees': [], 'revenue': 0, 'payroll': 0, 'operating': 0, 'profit': 0}
-			weekly_data[week_key]['employees'].append(emp_count)
-			weekly_data[week_key]['revenue'] += daily_revenue
-			weekly_data[week_key]['payroll'] += payroll
-			weekly_data[week_key]['operating'] += operating
-			weekly_data[week_key]['profit'] += profit
-			
-			# Monthly
-			if month_key not in monthly_data:
-				monthly_data[month_key] = {'month': month_key, 'employees': [], 'revenue': 0, 'payroll': 0, 'operating': 0, 'profit': 0}
-			monthly_data[month_key]['employees'].append(emp_count)
-			monthly_data[month_key]['revenue'] += daily_revenue
-			monthly_data[month_key]['payroll'] += payroll
-			monthly_data[month_key]['operating'] += operating
-			monthly_data[month_key]['profit'] += profit
-		
-		# Format results
-		weekly_list = []
-		for w in sorted(weekly_data.values(), key=lambda x: x['week']):
-			avg_emp = sum(w['employees']) / len(w['employees'])
-			weekly_list.append({'week': w['week'], 'avg_employees': round(avg_emp, 1), 'max_employees': max(w['employees']),
-				'revenue': round(w['revenue'], 2), 'payroll': round(w['payroll'], 2), 'operating': round(w['operating'], 2), 'profit': round(w['profit'], 2)})
-		
-		monthly_list = []
-		for m in sorted(monthly_data.values(), key=lambda x: x['month']):
-			avg_emp = sum(m['employees']) / len(m['employees'])
-			monthly_list.append({'month': m['month'], 'avg_employees': round(avg_emp, 1), 'max_employees': max(m['employees']),
-				'revenue': round(m['revenue'], 2), 'payroll': round(m['payroll'], 2), 'operating': round(m['operating'], 2), 'profit': round(m['profit'], 2)})
-		
-		total_revenue = sum(w['revenue'] for w in weekly_list)
-		total_profit = sum(w['profit'] for w in weekly_list)
-		avg_employees = sum(timeline_data.values()) / len(timeline_data)
-		
-		conn.close()
-		return jsonify({'employer_id': employer_id, 'employer_name': f'Employer {employer_id}', 'avg_hourly_rate': round(avg_hourly_rate, 2),
-			'total_jobs': len(jobs), 'date_range': {'start': min(timeline_data.keys()), 'end': max(timeline_data.keys()), 'days': len(timeline_data)},
-			'summary': {'avg_employees': round(avg_employees, 1), 'total_revenue': round(total_revenue, 2), 'total_profit': round(total_profit, 2),
-				'avg_daily_revenue': round(total_revenue / len(timeline_data), 2), 'avg_daily_profit': round(total_profit / len(timeline_data), 2)},
-			'weekly': weekly_list, 'monthly': monthly_list})
-	except Exception as exc:
-		return jsonify({"error": str(exc)}), 500
+    """Return revenue and profit over time for a specific employer."""
+    try:
+        conn = _get_db_connection()
+        cursor = conn.cursor()
+
+        # Get jobs for this employer
+        cursor.execute(
+            "SELECT jobId, hourlyRate FROM jobs WHERE employerId = ?", (employer_id,)
+        )
+        jobs = {row[0]: row[1] for row in cursor.fetchall()}
+
+        if not jobs:
+            conn.close()
+            return jsonify({"error": f"No jobs found for employer {employer_id}"}), 404
+
+        job_ids = tuple(jobs.keys())
+        avg_hourly_rate = sum(jobs.values()) / len(jobs)
+
+        # Query all participant logs for complete coverage
+        cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'participantstatuslogs%' ORDER BY SUBSTR(name, 19)"
+        )
+        table_names = [row[0] for row in cursor.fetchall()]
+
+        timeline_data = {}
+        for table_name in table_names:
+            placeholders = ",".join("?" * len(job_ids))
+            query = f"SELECT DATE(timestamp) as d, COUNT(DISTINCT participantId) as c FROM {table_name} WHERE jobId IN ({placeholders}) GROUP BY d"
+            try:
+                cursor.execute(query, job_ids)
+                for work_date, emp_count in cursor.fetchall():
+                    if work_date:
+                        timeline_data[work_date] = (
+                            timeline_data.get(work_date, 0) + emp_count
+                        )
+            except:
+                pass
+
+        if not timeline_data:
+            conn.close()
+            return jsonify(
+                {
+                    "employer_id": employer_id,
+                    "total_jobs": len(jobs),
+                    "weekly": [],
+                    "monthly": [],
+                    "summary": {},
+                }
+            )
+
+        # Calculate financials
+        hours_per_day = 8
+        weekly_data = {}
+        monthly_data = {}
+
+        for work_date in sorted(timeline_data.keys()):
+            emp_count = timeline_data[work_date]
+            daily_revenue = emp_count * avg_hourly_rate * hours_per_day
+            payroll = daily_revenue * 0.6
+            operating = daily_revenue * 0.3
+            profit = daily_revenue - payroll - operating
+
+            date_obj = pd.to_datetime(work_date)
+            week_key = date_obj.strftime("%Y-W%U")
+            month_key = date_obj.strftime("%Y-%m")
+
+            # Weekly
+            if week_key not in weekly_data:
+                weekly_data[week_key] = {
+                    "week": week_key,
+                    "employees": [],
+                    "revenue": 0,
+                    "payroll": 0,
+                    "operating": 0,
+                    "profit": 0,
+                }
+            weekly_data[week_key]["employees"].append(emp_count)
+            weekly_data[week_key]["revenue"] += daily_revenue
+            weekly_data[week_key]["payroll"] += payroll
+            weekly_data[week_key]["operating"] += operating
+            weekly_data[week_key]["profit"] += profit
+
+            # Monthly
+            if month_key not in monthly_data:
+                monthly_data[month_key] = {
+                    "month": month_key,
+                    "employees": [],
+                    "revenue": 0,
+                    "payroll": 0,
+                    "operating": 0,
+                    "profit": 0,
+                }
+            monthly_data[month_key]["employees"].append(emp_count)
+            monthly_data[month_key]["revenue"] += daily_revenue
+            monthly_data[month_key]["payroll"] += payroll
+            monthly_data[month_key]["operating"] += operating
+            monthly_data[month_key]["profit"] += profit
+
+        # Format results
+        weekly_list = []
+        for w in sorted(weekly_data.values(), key=lambda x: x["week"]):
+            avg_emp = sum(w["employees"]) / len(w["employees"])
+            weekly_list.append(
+                {
+                    "week": w["week"],
+                    "avg_employees": round(avg_emp, 1),
+                    "max_employees": max(w["employees"]),
+                    "revenue": round(w["revenue"], 2),
+                    "payroll": round(w["payroll"], 2),
+                    "operating": round(w["operating"], 2),
+                    "profit": round(w["profit"], 2),
+                }
+            )
+
+        monthly_list = []
+        for m in sorted(monthly_data.values(), key=lambda x: x["month"]):
+            avg_emp = sum(m["employees"]) / len(m["employees"])
+            monthly_list.append(
+                {
+                    "month": m["month"],
+                    "avg_employees": round(avg_emp, 1),
+                    "max_employees": max(m["employees"]),
+                    "revenue": round(m["revenue"], 2),
+                    "payroll": round(m["payroll"], 2),
+                    "operating": round(m["operating"], 2),
+                    "profit": round(m["profit"], 2),
+                }
+            )
+
+        total_revenue = sum(w["revenue"] for w in weekly_list)
+        total_profit = sum(w["profit"] for w in weekly_list)
+        avg_employees = sum(timeline_data.values()) / len(timeline_data)
+
+        conn.close()
+        return jsonify(
+            {
+                "employer_id": employer_id,
+                "employer_name": f"Employer {employer_id}",
+                "avg_hourly_rate": round(avg_hourly_rate, 2),
+                "total_jobs": len(jobs),
+                "date_range": {
+                    "start": min(timeline_data.keys()),
+                    "end": max(timeline_data.keys()),
+                    "days": len(timeline_data),
+                },
+                "summary": {
+                    "avg_employees": round(avg_employees, 1),
+                    "total_revenue": round(total_revenue, 2),
+                    "total_profit": round(total_profit, 2),
+                    "avg_daily_revenue": round(total_revenue / len(timeline_data), 2),
+                    "avg_daily_profit": round(total_profit / len(timeline_data), 2),
+                },
+                "weekly": weekly_list,
+                "monthly": monthly_list,
+            }
+        )
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
 
 
 def _render_employment_html(data: dict) -> str:
@@ -4010,407 +4011,94 @@ def _render_employment_html(data: dict) -> str:
 <!DOCTYPE html>
 <html><head>
 <meta charset="utf-8">
-<title>Employment & Turnover</title>
+<title>Employment & Workforce Trends</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:Arial,sans-serif;background:#f4f5f7;color:#222;padding:16px}
-.info-bar{background:#e7eef7;border-left:4px solid #2f5d8c;border-radius:6px;
-  padding:8px 14px;font-size:12px;color:#333;margin-bottom:14px;min-height:32px;line-height:1.6}
-.chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}
-.chart-panel{background:#fff;border-radius:10px;padding:14px;box-shadow:0 1px 5px rgba(0,0,0,.1)}
-.chart-panel h3{font-size:14px;margin-bottom:3px}
-.chart-note{font-size:11px;color:#777;margin-bottom:10px}
-.sm-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
-.sm-panel{background:#fff;border-radius:8px;padding:8px;border:1px solid #eee;
-  cursor:pointer;transition:border .15s,opacity .15s}
-.sm-panel:hover{border-color:#2f5d8c}
-.sm-title{font-size:10px;font-weight:bold;color:#333;margin-bottom:3px}
-.sm-sub{font-size:9px;color:#777}
-.tooltip{position:fixed;background:rgba(20,20,20,.92);color:#fff;padding:7px 11px;
-  border-radius:6px;font-size:12px;pointer-events:none;opacity:0;
-  transition:opacity .12s;line-height:1.6;z-index:999}
-@media(max-width:800px){.chart-grid{grid-template-columns:1fr}.sm-grid{grid-template-columns:repeat(2,1fr)}}
+.chart-panel{background:#fff;border-radius:10px;padding:20px;box-shadow:0 1px 5px rgba(0,0,0,.1);max-width:900px;margin:0 auto}
+.chart-panel h3{font-size:18px;margin-bottom:8px}
+.tooltip { position: fixed; background: rgba(20, 20, 20, 0.92); color: #fff; padding: 8px 12px;
+  border-radius: 6px; font-size: 12px; pointer-events: none; opacity: 0;
+  transition: opacity 0.12s; line-height: 1.6; z-index: 1000; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+.info-icon{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;
+  background:#2f5d8c;color:#fff;border-radius:50%;font-size:9px;margin-left:6px;cursor:help;vertical-align:middle}
 </style>
 </head>
 <body>
 
-<div class="info-bar" id="info-bar">
-  Click an employer bar in <strong>Turnover Ranking</strong> to highlight it in the small multiples grid.
-</div>
-
-<div class="chart-grid">
-  <div class="chart-panel" style="overflow-y:auto;max-height:480px">
-	<h3>Turnover Ranking by Employer</h3>
-	<p class="chart-note">Top 60 employers by turnover count. Click to highlight in small multiples.</p>
-	<div id="ch-ranking"></div>
-  </div>
-  <div class="chart-panel">
-	<h3>Monthly Worker Count — Small Multiples</h3>
-	<p class="chart-note">Top 16 employers by workplace check-ins. Selected employer highlighted in blue.</p>
-	<div class="sm-grid" id="ch-small"></div>
-  </div>
-  <div class="chart-panel">
-	<h3>Workforce Participation Over Time</h3>
-	<p class="chart-note">Active wage earners (green, left axis) and avg wage per worker (orange, right axis)</p>
-	<div id="ch-workforce"></div>
-  </div>
-  <div class="chart-panel">
-	<h3>Job Transitions Between Sectors</h3>
-	<p class="chart-note">Participant movement by job sector (education requirement) — first vs last period</p>
-	<div id="ch-sankey"></div>
-  </div>
-  <div class="chart-panel">
-	<h3>Job transitions between employers (Chords)</h3>
-	<p class="chart-note">Participant movement between employers — first vs last period</p>
-	<div id="ch-chord"></div>
+<div class="chart-panel">
+    <h3>Workforce Participation<span class="info-icon" onmouseover="showTip('<strong>City-wide trend</strong><br>Total active wage earners vs city-wide average monthly wage.', event)" onmouseout="hideTip()">?</span></h3>
+    <div id="ch-workforce" style="height:400px"></div>
 </div>
 
 <div class="tooltip" id="tip"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/d3-sankey@0.12/dist/d3-sankey.min.js"></script>
 <script>
 const DATA = __DATA__;
 const tip  = d3.select('#tip');
-let selectedEmp = null;
 
-function showTip(html,ev){ tip.html(html).style('opacity',1).style('left',(ev.clientX+14)+'px').style('top',(ev.clientY-40)+'px'); }
+function showTip(html, ev) {
+  tip.html(html).style('opacity', 1)
+     .style('left', (ev.clientX + 15) + 'px').style('top', (ev.clientY - 45) + 'px');
+}
 function hideTip(){ tip.style('opacity',0); }
-
-function selectEmployer(id){
-  selectedEmp = (selectedEmp===id)?null:id;
-  const bar = document.getElementById('info-bar');
-  if(selectedEmp){
-	bar.innerHTML=`Selected: <strong>Employer ${selectedEmp}</strong>
-	  <span style="cursor:pointer;color:#2f5d8c;margin-left:8px" onclick="selectEmployer(${selectedEmp})">✕ clear</span>`;
-  } else {
-	bar.innerHTML='Click an employer bar in <strong>Turnover Ranking</strong> to highlight it in the small multiples grid.';
-  }
-  drawRanking();
-  highlightSmall();
-}
-
-// ── Turnover ranking ─────────────────────────────────────────────────────
-function drawRanking(){
-  const el = document.getElementById('ch-ranking');
-  d3.select(el).selectAll('*').remove();
-  const records = DATA.turnover;
-  if(!records.length) return;
-
-  const W = el.clientWidth||420, barH = 18;
-  const m1 = {top:4, right:80, bottom:20, left:52};
-  const H = records.length*barH + m1.top + m1.bottom;
-  const w = W - m1.left - m1.right;
-
-  const svg = d3.select(el).append('svg').attr('width',W).attr('height',H);
-  const g   = svg.append('g').attr('transform',`translate(${m1.left},${m1.top})`);
-
-  const maxC = d3.max(records,d=>d.count);
-  const x = d3.scaleLinear().domain([0,maxC]).range([0,w]);
-  const y = d3.scaleBand().domain(records.map(d=>d.id)).range([0,records.length*barH]).padding(0.1);
-
-  // Stacked: departed (red) + arrived (blue)
-  records.forEach(d=>{
-	const yo = y(d.id), bh = y.bandwidth();
-	const xDep = x(d.departed), xArr = x(d.arrived);
-	const isSelected = selectedEmp===d.id;
-	const opacity = !selectedEmp||isSelected ? 0.85 : 0.25;
-
-	g.append('rect').attr('x',0).attr('y',yo).attr('width',xDep).attr('height',bh)
-	  .attr('fill','#d62728').attr('opacity',opacity);
-	g.append('rect').attr('x',xDep).attr('y',yo).attr('width',xArr).attr('height',bh)
-	  .attr('fill','#1f77b4').attr('opacity',opacity);
-
-	if(isSelected){
-	  g.append('rect').attr('x',-1).attr('y',yo-1).attr('width',w+2).attr('height',bh+2)
-		.attr('fill','none').attr('stroke','#2f5d8c').attr('stroke-width',2);
-	}
-
-	// invisible click target
-	g.append('rect').attr('x',0).attr('y',yo).attr('width',w).attr('height',bh)
-	  .attr('fill','transparent').style('cursor','pointer')
-	  .on('mouseover',ev=>showTip(
-		`Employer ${d.id}<br>Departed: ${d.departed} | Arrived: ${d.arrived}<br>`+
-		`Stable: ${d.stable} | Rate: ${(d.rate*100).toFixed(1)}%`,ev))
-	  .on('mouseout',hideTip)
-	  .on('click',()=>selectEmployer(d.id));
-  });
-
-  g.append('g').call(d3.axisLeft(y).tickFormat(d=>`Emp ${d}`).tickSize(0))
-	.call(ax=>{ax.select('.domain').remove();ax.selectAll('text').attr('font-size',9);});
-  g.append('g').attr('transform',`translate(0,${records.length*barH})`)
-	.call(d3.axisBottom(x).ticks(4));
-
-  // legend
-  const leg = g.append('g').attr('transform',`translate(${w+4},4)`);
-  [['#d62728','Departed'],['#1f77b4','Arrived']].forEach(([c,n],i)=>{
-	leg.append('rect').attr('x',0).attr('y',i*14).attr('width',10).attr('height',10).attr('fill',c);
-	leg.append('text').attr('x',13).attr('y',i*14+9).attr('font-size',9).text(n);
-  });
-}
-
-// ── Small multiples ──────────────────────────────────────────────────────
-function drawSmallMultiples(){
-  const container = document.getElementById('ch-small');
-  container.innerHTML='';
-  const {months, panels} = DATA.small_multiples;
-  if(!panels.length) return;
-
-  panels.forEach(panel=>{
-	const div = document.createElement('div');
-	div.className='sm-panel';
-	div.dataset.empid = panel.id;
-	div.addEventListener('click',()=>selectEmployer(panel.id));
-
-	const titleDiv = document.createElement('div');
-	titleDiv.className='sm-title';
-	titleDiv.textContent=`Employer ${panel.id}`;
-	div.appendChild(titleDiv);
-
-	const subDiv = document.createElement('div');
-	subDiv.className='sm-sub';
-	subDiv.textContent=`Total: ${panel.total.toLocaleString()} check-ins`;
-	div.appendChild(subDiv);
-
-	const W=160, H=60, m2={top:2, right:4, bottom:14, left:18};
-	const w=W - m2.left - m2.right, h=H - m2.top - m2.bottom;
-	const svg = d3.create('svg').attr('width',W).attr('height',H);
-	const g   = svg.append('g').attr('transform',`translate(${m2.left},${m2.top})`);
-
-	const x = d3.scalePoint().domain(months).range([0,w]);
-	const y = d3.scaleLinear().domain([0,d3.max(panel.values)||1]).nice().range([h,0]);
-	const ln= d3.line().x((_,i)=>x(months[i])).y(d=>y(d)).curve(d3.curveMonotoneX);
-
-	g.append('g').attr('transform',`translate(0,${h})`)
-	  .call(d3.axisBottom(x).tickValues(months.filter((_,i)=>i%6===0))
-		.tickSize(2).tickFormat(d=>d.slice(5)))
-	  .call(ax=>{ax.select('.domain').remove();ax.selectAll('text').attr('font-size',7);});
-	g.append('g').call(d3.axisLeft(y).ticks(2))
-	  .call(ax=>{ax.select('.domain').remove();ax.selectAll('text').attr('font-size',7);});
-
-	g.append('path').datum(panel.values).attr('fill','none')
-	  .attr('stroke','#1f77b4').attr('stroke-width',1.2).attr('d',ln);
-
-	div.appendChild(svg.node());
-	container.appendChild(div);
-  });
-}
-
-function highlightSmall(){
-  document.querySelectorAll('.sm-panel').forEach(el=>{
-	const id = parseInt(el.dataset.empid);
-	el.style.border   = selectedEmp===id ? '2px solid #2f5d8c' : '1px solid #eee';
-	el.style.opacity  = !selectedEmp||selectedEmp===id ? '1' : '0.35';
-	el.querySelector('.sm-title').style.color = selectedEmp===id?'#2f5d8c':'#333';
-	const pathEl = el.querySelector('path');
-	if(pathEl) pathEl.setAttribute('stroke', selectedEmp===id?'#2f5d8c':'#1f77b4');
-  });
-}
 
 // ── Workforce participation (dual axis) ──────────────────────────────────
 (function drawWorkforce(){
   const {months, series} = DATA.workforce;
-  if(!months.length) return;
+  if(!months || !months.length) return;
   const el = document.getElementById('ch-workforce');
-  const W = el.clientWidth||420, H = 260;
-  const m3 = {top:10, right:56, bottom:38, left:52};
+  const W = el.clientWidth||800, H = 400;
+  const m3 = {top:20, right:60, bottom:50, left:60};
   const w = W - m3.left - m3.right, h = H - m3.top - m3.bottom;
 
   const svg = d3.select(el).append('svg').attr('width',W).attr('height',H);
   const g   = svg.append('g').attr('transform',`translate(${m3.left},${m3.top})`);
 
   const x   = d3.scalePoint().domain(months).range([0,w]);
-  const yL  = d3.scaleLinear().domain(d3.extent(series[0].values)).nice().range([h,0]);
-  const yR  = d3.scaleLinear().domain(d3.extent(series[1].values)).nice().range([h,0]);
+  const yL  = d3.scaleLinear().domain([0, d3.max(series[0].values) * 1.1]).nice().range([h,0]);
+  const yR  = d3.scaleLinear().domain([0, d3.max(series[1].values) * 1.1]).nice().range([h,0]);
   const ln  = (ysc) => d3.line().x((_,i)=>x(months[i])).y(d=>ysc(d)).curve(d3.curveMonotoneX);
 
   g.append('g').attr('transform',`translate(0,${h})`)
 	.call(d3.axisBottom(x).tickValues(months.filter((_,i)=>i%4===0)).tickSize(-h))
 	.call(ax=>{ax.selectAll('.tick line').attr('stroke','#eee');ax.select('.domain').remove();})
-	.selectAll('text').attr('transform','rotate(-30)').attr('text-anchor','end').attr('font-size',9);
+	.selectAll('text').attr('transform','rotate(-30)').attr('text-anchor','end').attr('font-size',10);
 
-  g.append('g').call(d3.axisLeft(yL).ticks(5)).selectAll('text').attr('fill',series[0].color);
+  g.append('g').call(d3.axisLeft(yL).ticks(6)).selectAll('text').attr('fill',series[0].color);
   g.append('g').attr('transform',`translate(${w},0)`)
-	.call(d3.axisRight(yR).ticks(5).tickFormat(d=>'$'+d3.format('.0f')(d)))
+	.call(d3.axisRight(yR).ticks(6).tickFormat(d=>'$'+d3.format(',.0f')(d)))
 	.selectAll('text').attr('fill',series[1].color);
+
+  // Y-axis labels
+  g.append('text').attr('transform', 'rotate(-90)').attr('y', -45).attr('x', -h/2)
+    .attr('text-anchor', 'middle').attr('fill', series[0].color).attr('font-size', 12).text('Active Workers');
+  g.append('text').attr('transform', 'rotate(90)').attr('y', -w - 45).attr('x', h/2)
+    .attr('text-anchor', 'middle').attr('fill', series[1].color).attr('font-size', 12).text('Avg Monthly Wage');
 
   series.forEach((s,i)=>{
 	const ysc = i===0?yL:yR;
 	g.append('path').datum(s.values).attr('fill','none')
-	  .attr('stroke',s.color).attr('stroke-width',2).attr('d',ln(ysc));
-	g.append('text').attr('x',x(months[months.length-1])+4)
-	  .attr('y',ysc(s.values[s.values.length-1]))
-	  .attr('fill',s.color).attr('font-size',9).attr('dominant-baseline','middle')
-	  .text(i===0?'Workers':'Wage');
+	  .attr('stroke',s.color).attr('stroke-width',3).attr('d',ln(ysc));
+    
+    // Data points for tooltip
+    g.selectAll(`.dot-${i}`).data(s.values).enter().append('circle')
+      .attr('cx', (_, idx) => x(months[idx]))
+      .attr('cy', d => ysc(d))
+      .attr('r', 4)
+      .attr('fill', s.color)
+      .on('mouseover', (ev, d) => {
+          const idx = s.values.indexOf(d);
+          showTip(`<strong>${months[idx]}</strong><br>${s.name}: ${i===0?d.toLocaleString():'$'+d.toLocaleString()}`, ev);
+      })
+      .on('mouseout', hideTip);
   });
 })();
-
-// ── Sankey diagram ───────────────────────────────────────────────────────
-(function drawSankey(){
-  const {nodes, links} = DATA.sankey;
-  if(!nodes.length||!links.length) return;
-  const el = document.getElementById('ch-sankey');
-  const W = el.clientWidth||420, H = 320;
-  const m4 = {top:10, right:10, bottom:10, left:10};
-  const w = W - m4.left - m4.right, h = H - m4.top - m4.bottom;
-
-  const layout = d3.sankey()
-	.nodeId(d=>d.id).nodeWidth(14).nodePadding(14)
-	.extent([[0,0],[w,h]]);
-
-  const {nodes:sn, links:sl} = layout({
-	nodes: nodes.map(d=>({...d})),
-	links: links.map(d=>({...d})),
-  });
-
-  const color = d3.scaleOrdinal()
-	.domain(['Low','HighSchoolOrCollege','Bachelors','Graduate'])
-	.range(['#e41a1c','#ff7f00','#4daf4a','#377eb8']);
-  const nodeColor = d=>color(d.name.replace(/ \(.*\)/,''));
-
-  const svg = d3.select(el).append('svg').attr('width',W).attr('height',H);
-  const g   = svg.append('g').attr('transform',`translate(${m4.left},${m4.top})`);
-
-  g.selectAll('path').data(sl).join('path')
-	.attr('d',d3.sankeyLinkHorizontal())
-	.attr('fill','none')
-	.attr('stroke',d=>nodeColor(d.source))
-	.attr('stroke-width',d=>Math.max(1,d.width))
-	.attr('opacity',0.38)
-	.on('mouseover',(ev,d)=>showTip(`${d.source.name} → ${d.target.name}<br>Count: ${d.value}`,ev))
-	.on('mouseout',hideTip);
-
-  g.selectAll('rect').data(sn).join('rect')
-	.attr('x',d=>d.x0).attr('y',d=>d.y0)
-	.attr('width',d=>d.x1-d.x0).attr('height',d=>Math.max(1,d.y1-d.y0))
-	.attr('fill',nodeColor).attr('opacity',0.9)
-	.on('mouseover',(ev,d)=>showTip(`${d.name}<br>Flow: ${d.value}`,ev))
-	.on('mouseout',hideTip);
-
-  g.selectAll('text').data(sn).join('text')
-	.attr('x',d=>d.x0<w/2?d.x1+5:d.x0-5)
-	.attr('y',d=>(d.y0+d.y1)/2)
-	.attr('dy','0.35em')
-	.attr('text-anchor',d=>d.x0<w/2?'start':'end')
-	.attr('font-size',10)
-	.text(d=>`${d.name.replace(/ \(.*\)/,'')} (${d.value})`);
-})();
-
-// ── Force-directed graph for job transitions between employers ──────────────────
-(function drawForceGraph(){
-	const el = document.getElementById('ch-chord');
-	if(!el) return;
-
-	fetch('http://localhost:5000/api/job_transitions')
-		.then(res => res.json())
-		.then(data => {
-			if(!data || !data.nodes || !data.links || !data.nodes.length) {
-				el.innerHTML = '<p style="font-size:12px;color:#aaa;padding:20px">No job transition data available.</p>';
-				return;
-			}
-
-			const W = el.clientWidth || 420, H = 420;
-			
-			const svg = d3.select(el).append('svg').attr('width', W).attr('height', H);
-			
-			// Add zoom behavior
-			const g = svg.append('g');
-			const zoom = d3.zoom().on('zoom', (event) => {
-				g.attr('transform', event.transform);
-			});
-			svg.call(zoom);
-
-			// Find max link value for scaling
-			const maxLinkValue = Math.max(...data.links.map(d => d.value));
-
-			// Create simulation
-			const simulation = d3.forceSimulation(data.nodes)
-				.force('link', d3.forceLink(data.links)
-					.id(d => d.id)
-					.distance(d => 200 - (d.value / maxLinkValue) * 80)
-					.strength(d => 0.3))
-				.force('charge', d3.forceManyBody().strength(-800))
-				.force('center', d3.forceCenter(W / 2, H / 2).strength(0.1))
-				.force('collision', d3.forceCollide().radius(d => 50));
-
-			// Draw links
-			const links = g.selectAll('line').data(data.links).join('line')
-				.attr('stroke', '#999')
-				.attr('stroke-opacity', 0.4)
-				.attr('stroke-width', d => Math.sqrt(d.value) * 1.5)
-				.on('mouseover', (ev, d) => showTip(
-					`${data.nodes[d.source.index].name} ↔ ${data.nodes[d.target.index].name}<br>Transitions: ${d.value}`, ev))
-				.on('mouseout', hideTip);
-
-			// Draw nodes
-			const nodes = g.selectAll('circle').data(data.nodes).join('circle')
-				.attr('r', 20)
-				.attr('fill', (d, i) => d3.schemeTableau10[i % 10])
-				.attr('stroke', '#fff')
-				.attr('stroke-width', 2)
-				.on('mouseover', (ev, d) => {
-					showTip(`${d.name}`, ev);
-					d3.select(ev.currentTarget).attr('r', 25).attr('stroke-width', 3);
-				})
-				.on('mouseout', (ev, d) => {
-					hideTip();
-					d3.select(ev.currentTarget).attr('r', 20).attr('stroke-width', 2);
-				});
-
-			// Enable dragging
-			nodes.call(d3.drag()
-				.on('start', (event, d) => {
-					if (!event.active) simulation.alphaTarget(0.3).restart();
-					d.fx = d.x;
-					d.fy = d.y;
-				})
-				.on('drag', (event, d) => {
-					d.fx = event.x;
-					d.fy = event.y;
-				})
-				.on('end', (event, d) => {
-					if (!event.active) simulation.alphaTarget(0);
-					d.fx = null;
-					d.fy = null;
-				}));
-
-			// Draw labels
-			const labels = g.selectAll('text').data(data.nodes).join('text')
-				.attr('text-anchor', 'middle')
-				.attr('dy', '0.35em')
-				.attr('font-size', 10)
-				.attr('fill', '#333')
-				.attr('pointer-events', 'none')
-				.text(d => d.name);
-
-			// Update positions on simulation tick
-			simulation.on('tick', () => {
-				links
-					.attr('x1', d => d.source.x)
-					.attr('y1', d => d.source.y)
-					.attr('x2', d => d.target.x)
-					.attr('y2', d => d.target.y);
-
-				nodes
-					.attr('cx', d => d.x)
-					.attr('cy', d => d.y);
-
-				labels
-					.attr('x', d => d.x)
-					.attr('y', d => d.y);
-			});
-		})
-		.catch(err => {
-			el.innerHTML = `<p style="font-size:12px;color:#aaa;padding:20px">Error loading data: ${err.message}</p>`;
-		});
-})();
-
-// initial draw
-drawRanking();
-drawSmallMultiples();
-highlightSmall();
 </script>
 </body></html>"""
+
+    return page.replace("__DATA__", _json.dumps(data))
 
     return page.replace("__DATA__", _json.dumps(data))
 
