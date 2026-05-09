@@ -7,7 +7,7 @@ const tabs = [
   { to: "/business", label: "Enterprise Health", shortcut: "3" },
   {
     to: "/residents",
-    label: "Resident Vitality",
+    label: "Citizen Finances",
     shortcut: "4",
   },
   {

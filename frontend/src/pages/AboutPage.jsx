@@ -104,28 +104,24 @@ function AboutPage() {
           >
             {[
               {
-                tab: "City Pulse (Alt+2)",
+                tab: "City Pulse",
                 desc: "An executive summary providing a high-level overview of city economic health. Features six KPI cards for rapid inspection, city-wide wage trends, an employer prosperity map, and a detailed education-level wage breakdown.",
               },
               {
-                tab: "Enterprise Health (Alt+3)",
+                tab: "Enterprise Health",
                 desc: "A deep-dive into business stability. Linked charts allow you to correlate hourly rates with job listings and turnover. Click any employer to instantly highlight its specific workplace activity and size metrics across the entire dashboard.",
               },
               {
-                tab: "Resident Vitality (Alt+4)",
+                tab: "Citizen Finances",
                 desc: "Focuses on the financial well-being of Engagement's citizens. Includes expense category tracking and a Parallel Coordinates chart for individual financial profiling. Click education groups to filter the participant profile map.",
               },
               {
-                tab: "Labor Dynamics (Alt+5)",
+                tab: "Labor Dynamics",
                 desc: "The core engine for workforce analysis. Features a dual-view toggle: 'Statistical Trends' for city-wide participation and work-life balance correlations, and 'Mobility Network' for a geographical view of job transfers between employers.",
               },
               {
-                tab: "Urban Explorer (Alt+6)",
+                tab: "Urban Explorer",
                 desc: "An interactive infrastructure map. Explore building footprints (Residential, Commercial, School) and location points for social venues. Hover over any object for detailed coordinates and infrastructure metadata.",
-              },
-              {
-                tab: "Keyboard Shortcuts",
-                desc: "Navigate the dashboard rapidly using Alt + [1-7]. Use 'Alt + 1' to return to this guide at any time. Caching ensures that switching between tabs is instantaneous after the first load.",
               },
             ].map(({ tab, desc }) => (
               <div
@@ -155,45 +151,30 @@ function AboutPage() {
         </div>
 
         <div className="chart-card">
-          <h3>Interactive Guidance</h3>
-          <p className="chart-note">How to get the most out of the dashboard.</p>
-          <div style={{ lineHeight: "1.8", fontSize: "13px" }}>
-            <div className="answer-box" style={{ marginBottom: "10px" }}>
-              <strong>Standardized Dark Tooltips are the primary info source.</strong>{" "}
-              <br />
-              Since all static 'Details' panels have been removed for a cleaner look, all deep-dive data is now delivered via hover. Standardized dark tooltips provide IDs, health scores, and exact values on every interactive element.
-            </div>
-            <div className="answer-box" style={{ marginBottom: "10px" }}>
-              <strong>Integrated Info Guides (?).</strong>{" "}
-              <br />
-              Click or hover over the blue '?' icons next to any chart title. These now contain the full description, data derivation notes, and interpretation guidance for that specific visualization.
-            </div>
-            <div className="answer-box">
-              <strong>Refined Map Navigation.</strong>{" "}
-              <br />
-              Accidental scrolling while navigating maps has been disabled. To zoom, use a pinch gesture (trackpad), hold the 'Ctrl' key while scrolling, or use the dedicated zoom buttons (+/-) on the map interface.
-            </div>
-          </div>
-        </div>
-
-        <div className="chart-card">
           <h3>Data Interpretation</h3>
           <p className="chart-note">Technical caveats and data proxies.</p>
           <div style={{ lineHeight: "1.8", fontSize: "13px" }}>
             <div className="answer-box" style={{ marginBottom: "10px" }}>
               <strong>Business health scores are derived estimates.</strong>{" "}
               <br />
-              Computed as: 0.25×(jobs) + 0.25×(avg rate) + 0.25×(stable) − 0.25×(turnover rate). This represents a relative prosperity index compared to other city employers, not an absolute financial profit.
+              Computed as: 0.25×(jobs) + 0.25×(avg rate) + 0.25×(stable) −
+              0.25×(turnover rate). This represents a relative prosperity index
+              compared to other city employers, not an absolute financial
+              profit.
             </div>
             <div className="answer-box" style={{ marginBottom: "10px" }}>
               <strong>Lifestyle Scatter (Leisure vs Productivity).</strong>{" "}
               <br />
-              The 'Labor Dynamics' scatter plot samples 1,000 residents to maintain high frame rates. It correlates workplace visits with Pub/Restaurant visits to proxy for work-life balance and social engagement.
+              The 'Labor Dynamics' scatter plot samples 1,000 residents to
+              maintain high frame rates. It correlates workplace visits with
+              Pub/Restaurant visits to proxy for work-life balance and social
+              engagement.
             </div>
             <div className="answer-box">
-              <strong>Turnover measurement intervals.</strong>{" "}
-              <br />
-              Mobility and turnover are calculated by comparing worker snapshots at the absolute start and end of the study period (spanned by 72 status logs) to identify long-term labor migration patterns.
+              <strong>Turnover measurement intervals.</strong> <br />
+              Mobility and turnover are calculated by comparing worker snapshots
+              at the absolute start and end of the study period (spanned by 72
+              status logs) to identify long-term labor migration patterns.
             </div>
           </div>
         </div>
