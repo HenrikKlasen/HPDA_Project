@@ -238,7 +238,6 @@ input[type="month"] {
 .tab-link:hover {
   background: var(--accent-light);
   color: var(--accent);
-  transform: translateY(-2px);
 }
 
 .tab-link:hover .tab-shortcut {
@@ -332,6 +331,12 @@ input[type="month"] {
   box-shadow: var(--shadow);
   padding: 18px;
   min-height: 360px;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.guide-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
 }
 
 .chart-card.large {
@@ -382,6 +387,12 @@ input[type="month"] {
   box-shadow: var(--shadow);
   padding: 18px;
   min-height: 520px;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.details-panel:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 15px rgba(0,0,0,.08);
 }
 
 .details-panel h3 {
@@ -971,6 +982,12 @@ input[type="month"] {
   border-radius: 12px;
   padding: 1rem;
   box-shadow: var(--shadow);
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 15px rgba(0,0,0,.08);
 }
 
 .kpi-title {

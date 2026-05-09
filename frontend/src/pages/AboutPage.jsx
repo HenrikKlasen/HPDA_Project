@@ -8,9 +8,9 @@ function AboutPage() {
         <p>
           This dashboard was built to support the{" "}
           <strong>VAST Challenge 2022 — Challenge 3: Economic</strong> answer
-          sheet. It provides visual analytics tools to explore the financial
-          health of businesses, residents, wages, cost of living, employment,
-          and turnover in the fictional city of{" "}
+          sheet. <br /> It provides visual analytics tools to explore the
+          financial health of businesses, residents, wages, cost of living,
+          employment, and turnover in the fictional city of{" "}
           <strong>Engagement, Ohio</strong>.
         </p>
       </div>
@@ -104,24 +104,28 @@ function AboutPage() {
           >
             {[
               {
-                tab: "City Pulse (Overall)",
-                desc: "A high-level summary answering all three challenge questions at once. Shows KPI cards (total wages, spending, median net income, turnover rate, active employers and earners), a wages vs cost of living line chart, an employer health ranking, a business prosperity scatterplot, and a spatial employer map. Click any employer to highlight it across the ranking, scatter, and map.",
+                tab: "City Pulse (Alt+2)",
+                desc: "An executive summary providing a high-level overview of city economic health. Features six KPI cards for rapid inspection, city-wide wage trends, an employer prosperity map, and a detailed education-level wage breakdown.",
               },
               {
-                tab: "Enterprise Health",
-                desc: "Deep-dive into employer health. Shows a full dashboard with four linked charts: a prosperity/stability scatterplot, an employer health ranking, an employer size and wage distribution chart, and a workplace activity over time chart. Health score is derived from job count, average wage, stable workers, and turnover rate — it is an estimate, not an official measure. Click any employer to highlight it across all four charts.",
+                tab: "Enterprise Health (Alt+3)",
+                desc: "A deep-dive into business stability. Linked charts allow you to correlate hourly rates with job listings and turnover. Click any employer to instantly highlight its specific workplace activity and size metrics across the entire dashboard.",
               },
               {
-                tab: "Resident Vitality",
-                desc: "Focuses on participant income and spending. Shows financial categories over time, wages vs cost of living, a net income distribution histogram, average income by education group, and a full-width parallel coordinates chart of individual participant financial profiles. Click an education level in the group chart to highlight matching participants in the parallel coordinates.",
+                tab: "Resident Vitality (Alt+4)",
+                desc: "Focuses on the financial well-being of Engagement's citizens. Includes expense category tracking and a Parallel Coordinates chart for individual financial profiling. Click education groups to filter the participant profile map.",
               },
               {
-                tab: "Labor Dynamics",
-                desc: "Analyzes workforce trends and job mobility. Features a dual-view interface: a Statistical Trends view showing city-wide wages and participation, and a Job Mobility view featuring an interactive map of worker transfers between employers. Switch between views using the toggle in the dashboard header.",
+                tab: "Labor Dynamics (Alt+5)",
+                desc: "The core engine for workforce analysis. Features a dual-view toggle: 'Statistical Trends' for city-wide participation and work-life balance correlations, and 'Mobility Network' for a geographical view of job transfers between employers.",
               },
               {
-                tab: "Urban Map",
-                desc: "An interactive spatial map of the city. Shows all building footprints (Commercial, Residential, School) and location dots for employers, restaurants, pubs, and schools. Supports zoom and pan. Use the toggle buttons to show or hide building types and location categories.",
+                tab: "Urban Explorer (Alt+6)",
+                desc: "An interactive infrastructure map. Explore building footprints (Residential, Commercial, School) and location points for social venues. Hover over any object for detailed coordinates and infrastructure metadata.",
+              },
+              {
+                tab: "Keyboard Shortcuts",
+                desc: "Navigate the dashboard rapidly using Alt + [1-7]. Use 'Alt + 1' to return to this guide at any time. Caching ensures that switching between tabs is instantaneous after the first load.",
               },
             ].map(({ tab, desc }) => (
               <div
@@ -131,7 +135,9 @@ function AboutPage() {
                   borderRadius: "8px",
                   padding: "12px",
                   borderLeft: "3px solid #2f5d8c",
+                  transition: "transform 0.2s, box-shadow 0.2s",
                 }}
+                className="guide-card"
               >
                 <div
                   style={{
@@ -149,35 +155,45 @@ function AboutPage() {
         </div>
 
         <div className="chart-card">
-          <h3>Important Notes</h3>
-          <p className="chart-note">Caveats and interpretation guidance.</p>
+          <h3>Interactive Guidance</h3>
+          <p className="chart-note">How to get the most out of the dashboard.</p>
+          <div style={{ lineHeight: "1.8", fontSize: "13px" }}>
+            <div className="answer-box" style={{ marginBottom: "10px" }}>
+              <strong>Standardized Dark Tooltips are the primary info source.</strong>{" "}
+              <br />
+              Since all static 'Details' panels have been removed for a cleaner look, all deep-dive data is now delivered via hover. Standardized dark tooltips provide IDs, health scores, and exact values on every interactive element.
+            </div>
+            <div className="answer-box" style={{ marginBottom: "10px" }}>
+              <strong>Integrated Info Guides (?).</strong>{" "}
+              <br />
+              Click or hover over the blue '?' icons next to any chart title. These now contain the full description, data derivation notes, and interpretation guidance for that specific visualization.
+            </div>
+            <div className="answer-box">
+              <strong>Refined Map Navigation.</strong>{" "}
+              <br />
+              Accidental scrolling while navigating maps has been disabled. To zoom, use a pinch gesture (trackpad), hold the 'Ctrl' key while scrolling, or use the dedicated zoom buttons (+/-) on the map interface.
+            </div>
+          </div>
+        </div>
+
+        <div className="chart-card">
+          <h3>Data Interpretation</h3>
+          <p className="chart-note">Technical caveats and data proxies.</p>
           <div style={{ lineHeight: "1.8", fontSize: "13px" }}>
             <div className="answer-box" style={{ marginBottom: "10px" }}>
               <strong>Business health scores are derived estimates.</strong>{" "}
-              <br></br>
-              They are computed from job count, average wage, employee
-              stability, and turnover rate, not from direct revenue data.
-              FinancialJournal records participant income and spending, not
-              business profit.
+              <br />
+              Computed as: 0.25×(jobs) + 0.25×(avg rate) + 0.25×(stable) − 0.25×(turnover rate). This represents a relative prosperity index compared to other city employers, not an absolute financial profit.
             </div>
             <div className="answer-box" style={{ marginBottom: "10px" }}>
-              <strong>
-                Job sector transitions use education requirement as a proxy.
-              </strong>{" "}
-              <br></br>
-              The dataset does not have explicit sector labels, so the Sankey
-              diagram in Employment &amp; Turnover uses the education
-              requirement of a participant's dominant job as a sector proxy.
+              <strong>Lifestyle Scatter (Leisure vs Productivity).</strong>{" "}
+              <br />
+              The 'Labor Dynamics' scatter plot samples 1,000 residents to maintain high frame rates. It correlates workplace visits with Pub/Restaurant visits to proxy for work-life balance and social engagement.
             </div>
             <div className="answer-box">
-              <strong>
-                Turnover is measured between the first and last status log
-                periods.
-              </strong>{" "}
-              <br></br>
-              The 72 ParticipantStatusLog snapshots span the full study period.
-              Departed = workers present at the start who are gone at the end.
-              Arrived = workers not present at the start who appear at the end.
+              <strong>Turnover measurement intervals.</strong>{" "}
+              <br />
+              Mobility and turnover are calculated by comparing worker snapshots at the absolute start and end of the study period (spanned by 72 status logs) to identify long-term labor migration patterns.
             </div>
           </div>
         </div>
