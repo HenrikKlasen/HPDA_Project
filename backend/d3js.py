@@ -13,9 +13,9 @@ CORS(app)
 
 def _resolve_db_path() -> Path:
 	"""Resolve the SQLite file location with a small fallback chain."""
-	backend_db = Path(__file__).resolve().parent / "vast_challenge.db"
 	root_db = Path(__file__).resolve().parent.parent / "vast_challenge.db"
-	return backend_db if backend_db.exists() else root_db
+	backend_db = Path(__file__).resolve().parent / "vast_challenge.db"
+	return root_db if root_db.exists() else backend_db
 
 
 DB_PATH = _resolve_db_path()
@@ -3496,6 +3496,105 @@ def get_job_transitions():
 	
 	except Exception as exc:
 		return jsonify({"error": f"Failed to load job transitions: {exc}"}), 500
+
+
+@app.route('/api/employer_financials_timeline/<int:employer_id>', methods=['GET'])
+def api_employer_financials_timeline(employer_id: int):
+	"""Return revenue and profit over time for a specific employer."""
+	try:
+		conn = _get_db_connection()
+		cursor = conn.cursor()
+		
+		# Get jobs for this employer
+		cursor.execute("SELECT jobId, hourlyRate FROM jobs WHERE employerId = ?", (employer_id,))
+		jobs = {row[0]: row[1] for row in cursor.fetchall()}
+		
+		if not jobs:
+			conn.close()
+			return jsonify({"error": f"No jobs found for employer {employer_id}"}), 404
+		
+		job_ids = tuple(jobs.keys())
+		avg_hourly_rate = sum(jobs.values()) / len(jobs)
+		
+		# Query all participant logs for complete coverage
+		cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'participantstatuslogs%' ORDER BY SUBSTR(name, 19)")
+		table_names = [row[0] for row in cursor.fetchall()]
+		
+		timeline_data = {}
+		for table_name in table_names:
+			placeholders = ','.join('?' * len(job_ids))
+			query = f"SELECT DATE(timestamp) as d, COUNT(DISTINCT participantId) as c FROM {table_name} WHERE jobId IN ({placeholders}) GROUP BY d"
+			try:
+				cursor.execute(query, job_ids)
+				for work_date, emp_count in cursor.fetchall():
+					if work_date:
+						timeline_data[work_date] = timeline_data.get(work_date, 0) + emp_count
+			except:
+				pass
+		
+		if not timeline_data:
+			conn.close()
+			return jsonify({'employer_id': employer_id, 'total_jobs': len(jobs), 'weekly': [], 'monthly': [], 'summary': {}})
+		
+		# Calculate financials
+		hours_per_day = 8
+		weekly_data = {}
+		monthly_data = {}
+		
+		for work_date in sorted(timeline_data.keys()):
+			emp_count = timeline_data[work_date]
+			daily_revenue = emp_count * avg_hourly_rate * hours_per_day
+			payroll = daily_revenue * 0.6
+			operating = daily_revenue * 0.3
+			profit = daily_revenue - payroll - operating
+			
+			date_obj = pd.to_datetime(work_date)
+			week_key = date_obj.strftime('%Y-W%U')
+			month_key = date_obj.strftime('%Y-%m')
+			
+			# Weekly
+			if week_key not in weekly_data:
+				weekly_data[week_key] = {'week': week_key, 'employees': [], 'revenue': 0, 'payroll': 0, 'operating': 0, 'profit': 0}
+			weekly_data[week_key]['employees'].append(emp_count)
+			weekly_data[week_key]['revenue'] += daily_revenue
+			weekly_data[week_key]['payroll'] += payroll
+			weekly_data[week_key]['operating'] += operating
+			weekly_data[week_key]['profit'] += profit
+			
+			# Monthly
+			if month_key not in monthly_data:
+				monthly_data[month_key] = {'month': month_key, 'employees': [], 'revenue': 0, 'payroll': 0, 'operating': 0, 'profit': 0}
+			monthly_data[month_key]['employees'].append(emp_count)
+			monthly_data[month_key]['revenue'] += daily_revenue
+			monthly_data[month_key]['payroll'] += payroll
+			monthly_data[month_key]['operating'] += operating
+			monthly_data[month_key]['profit'] += profit
+		
+		# Format results
+		weekly_list = []
+		for w in sorted(weekly_data.values(), key=lambda x: x['week']):
+			avg_emp = sum(w['employees']) / len(w['employees'])
+			weekly_list.append({'week': w['week'], 'avg_employees': round(avg_emp, 1), 'max_employees': max(w['employees']),
+				'revenue': round(w['revenue'], 2), 'payroll': round(w['payroll'], 2), 'operating': round(w['operating'], 2), 'profit': round(w['profit'], 2)})
+		
+		monthly_list = []
+		for m in sorted(monthly_data.values(), key=lambda x: x['month']):
+			avg_emp = sum(m['employees']) / len(m['employees'])
+			monthly_list.append({'month': m['month'], 'avg_employees': round(avg_emp, 1), 'max_employees': max(m['employees']),
+				'revenue': round(m['revenue'], 2), 'payroll': round(m['payroll'], 2), 'operating': round(m['operating'], 2), 'profit': round(m['profit'], 2)})
+		
+		total_revenue = sum(w['revenue'] for w in weekly_list)
+		total_profit = sum(w['profit'] for w in weekly_list)
+		avg_employees = sum(timeline_data.values()) / len(timeline_data)
+		
+		conn.close()
+		return jsonify({'employer_id': employer_id, 'employer_name': f'Employer {employer_id}', 'avg_hourly_rate': round(avg_hourly_rate, 2),
+			'total_jobs': len(jobs), 'date_range': {'start': min(timeline_data.keys()), 'end': max(timeline_data.keys()), 'days': len(timeline_data)},
+			'summary': {'avg_employees': round(avg_employees, 1), 'total_revenue': round(total_revenue, 2), 'total_profit': round(total_profit, 2),
+				'avg_daily_revenue': round(total_revenue / len(timeline_data), 2), 'avg_daily_profit': round(total_profit / len(timeline_data), 2)},
+			'weekly': weekly_list, 'monthly': monthly_list})
+	except Exception as exc:
+		return jsonify({"error": str(exc)}), 500
 
 
 def _render_employment_html(data: dict) -> str:

@@ -120,6 +120,27 @@ function BuildingsMap({ onEmployerSelect, transitionData, isEmploymentNetworkMap
     return `M ${x1} ${y1} Q ${controlX} ${controlY} ${x2} ${y2}`;
   };
 
+  // Reverse a path for opposite direction animation
+  const reversePath = (pathData) => {
+    // Handle straight line: M x1 y1 L x2 y2
+    const lineMatcher = /M\s+([\d.]+)\s+([\d.]+)\s+L\s+([\d.]+)\s+([\d.]+)/;
+    const lineMatch = pathData.match(lineMatcher);
+    if (lineMatch) {
+      const [, x1, y1, x2, y2] = lineMatch;
+      return `M ${x1} ${y1} L ${x2} ${y2}`;
+    }
+
+    // Handle quadratic curve: M x1 y1 Q cx cy x2 y2
+    const curveMatcher = /M\s+([\d.]+)\s+([\d.]+)\s+Q\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)/;
+    const curveMatch = pathData.match(curveMatcher);
+    if (curveMatch) {
+      const [, x1, y1, cx, cy, x2, y2] = curveMatch;
+      return `M ${x2} ${y2} Q ${cx} ${cy} ${x1} ${y1}`;
+    }
+
+    return pathData;
+  };
+
   // Get health score for employer
   const getHealthScore = (employerId) => {
     const employer = employers.find(e => e.employerId === employerId);
@@ -462,6 +483,14 @@ function resetZoom() {
             aria-label="Map of building polygons"
             style={{ overflow: 'hidden', cursor: 'grab', border: '1px solid #e5e7eb', display: 'block', touchAction: 'none' }}
           >
+            <defs>
+              <marker id="arrowOutgoing" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+                <polygon points="0 0, 10 3, 0 6" fill="${palette.outgoing}" />
+              </marker>
+              <marker id="arrowIncoming" markerWidth="10" markerHeight="10" refX="2" refY="3" orient="auto-start-reverse">
+                <polygon points="0 0, 10 3, 0 6" fill="${palette.incoming}" />
+              </marker>
+            </defs>
             <g ref={groupRef}>
               <rect width={displayWidth} height={displayHeight} fill="transparent" style={{ pointerEvents: 'all' }} />
               {/* <image href="/assets/basemap.png" x="0" y="0" width={displayWidth} height={displayHeight} style={{ pointerEvents: 'all' }} /> */}
@@ -473,41 +502,85 @@ function resetZoom() {
                 
                 if (!sourceNode || !targetNode) return null;
                 
+                // Match nodes with actual map points to get coordinates
+                const sourcePoint = points.find(p => p.id === String(sourceNode.id) && p.category === 'Employer');
+                const targetPoint = points.find(p => p.id === String(targetNode.id) && p.category === 'Employer');
+                
+                if (!sourcePoint || !targetPoint) return null;
+                
+                // Validate coordinates
+                if (!Number.isFinite(sourcePoint.x) || !Number.isFinite(sourcePoint.y) || 
+                    !Number.isFinite(targetPoint.x) || !Number.isFinite(targetPoint.y)) {
+                  return null;
+                }
+                
                 const selectedIdNum = selectedEmployerId ? parseInt(selectedEmployerId, 10) : null;
                 const hoveredIdNum = hoveredEmployerId ? parseInt(hoveredEmployerId, 10) : null;
                 
                 const isSelected = selectedIdNum && (link.source === selectedIdNum || link.target === selectedIdNum);
                 const isHovered = hoveredIdNum && (link.source === hoveredIdNum || link.target === hoveredIdNum);
                 
-                let opacity = 0;
-                if (isHovered) opacity = 0.8;
-                else if (isSelected) opacity = 0.6;
-                else if (!selectedIdNum && !hoveredIdNum) opacity = 0.15;
+                // Show connected edges brightly, hide all others when interacting
+                let opacity = 0.25;
+                if (hoveredIdNum || selectedIdNum) {
+                  opacity = (isHovered || isSelected) ? (isHovered ? 0.8 : 0.6) : 0;
+                }
                 
                 const strokeWidth = Math.max(1, Math.sqrt(link.value) * 2);
                 const edgeColor = selectedIdNum ? getEdgeColor(link, selectedIdNum) : '#999';
                 
                 // Check for bidirectional edge
                 const bidirectional = hasBidirectionalEdge(transitionData.links, link.source, link.target);
-                const x1 = x(sourceNode.x);
-                const y1 = y(sourceNode.y);
-                const x2 = x(targetNode.x);
-                const y2 = y(targetNode.y);
+                const x1 = x(sourcePoint.x);
+                const y1 = y(sourcePoint.y);
+                const x2 = x(targetPoint.x);
+                const y2 = y(targetPoint.y);
                 
                 // For bidirectional edges, curve them in opposite directions
                 const isCurveUp = link.source < link.target;
                 const pathData = bidirectional ? getCurvedPath(x1, y1, x2, y2, isCurveUp) : `M ${x1} ${y1} L ${x2} ${y2}`;
                 
                 return (
-                  <path
-                    key={`transition-${idx}`}
-                    d={pathData}
-                    stroke={edgeColor}
-                    strokeWidth={strokeWidth}
-                    fill="none"
-                    opacity={opacity}
-                    style={{ pointerEvents: 'none', transition: 'opacity 0.15s ease, stroke 0.15s ease' }}
-                  />
+                  <g key={`transition-${idx}`}>
+                    <path
+                      d={pathData}
+                      stroke={edgeColor}
+                      strokeWidth={strokeWidth}
+                      fill="none"
+                      opacity={opacity}
+                      style={{ pointerEvents: 'none', transition: 'opacity 0.15s ease, stroke 0.15s ease' }}
+                    />
+                    {/* Animated arrows on selected edges */}
+                    {selectedIdNum && opacity > 0 && (
+                      <>
+                        {link.source === selectedIdNum && (
+                          /* Outgoing edge arrow - moves away from source */
+                          <circle cx="0" cy="0" r="3" fill={palette.outgoing} opacity={opacity} style={{ pointerEvents: 'none' }}>
+                            <animateMotion dur="1.5s" repeatCount="indefinite">
+                              <mpath xlinkHref={`#path-${idx}`} />
+                            </animateMotion>
+                          </circle>
+                        )}
+                        {link.target === selectedIdNum && (
+                          /* Incoming edge arrow - moves toward target (opposite direction) */
+                          <circle cx="0" cy="0" r="3" fill={palette.incoming} opacity={opacity} style={{ pointerEvents: 'none' }}>
+                            <animateMotion dur="1.5s" repeatCount="indefinite">
+                              <mpath xlinkHref={`#path-reverse-${idx}`} />
+                            </animateMotion>
+                          </circle>
+                        )}
+                      </>
+                    )}
+                    {/* Reference paths for animation */}
+                    {selectedIdNum && (
+                      <>
+                        <path id={`path-${idx}`} d={pathData} style={{ display: 'none' }} />
+                        {link.target === selectedIdNum && (
+                          <path id={`path-reverse-${idx}`} d={reversePath(pathData)} style={{ display: 'none' }} />
+                        )}
+                      </>
+                    )}
+                  </g>
                 );
               })}
 
@@ -524,8 +597,14 @@ function resetZoom() {
                 
                 if (!sourceNode || !targetNode) return null;
                 
-                const midX = (x(sourceNode.x) + x(targetNode.x)) / 2;
-                const midY = (y(sourceNode.y) + y(targetNode.y)) / 2;
+                // Match nodes with actual map points to get coordinates
+                const sourcePoint = points.find(p => p.id === String(sourceNode.id) && p.category === 'Employer');
+                const targetPoint = points.find(p => p.id === String(targetNode.id) && p.category === 'Employer');
+                
+                if (!sourcePoint || !targetPoint) return null;
+                
+                const midX = (x(sourcePoint.x) + x(targetPoint.x)) / 2;
+                const midY = (y(sourcePoint.y) + y(targetPoint.y)) / 2;
                 
                 return (
                   <text
