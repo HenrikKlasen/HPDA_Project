@@ -12,10 +12,10 @@ CORS(app)
 
 
 def _resolve_db_path() -> Path:
-	"""Resolve the SQLite file location with a small fallback chain."""
-	root_db = Path(__file__).resolve().parent.parent / "vast_challenge.db"
-	backend_db = Path(__file__).resolve().parent / "vast_challenge.db"
-	return root_db if root_db.exists() else backend_db
+    """Resolve the SQLite file location with a small fallback chain."""
+    backend_db = Path(__file__).resolve().parent / "vast_challenge.db"
+    root_db = Path(__file__).resolve().parent.parent / "vast_challenge.db"
+    return backend_db if backend_db.exists() else root_db
 
 
 DB_PATH = _resolve_db_path()
@@ -23,646 +23,764 @@ IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def _is_valid_identifier(value: str) -> bool:
-	return bool(value and IDENTIFIER_PATTERN.match(value))
+    return bool(value and IDENTIFIER_PATTERN.match(value))
 
 
 def _get_db_connection() -> sqlite3.Connection:
-	conn = sqlite3.connect(DB_PATH)
-	conn.row_factory = sqlite3.Row
-	return conn
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 
 def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
-	row = conn.execute(
-		"SELECT name FROM sqlite_master WHERE type='table' AND name = ?",
-		(table_name,),
-	).fetchone()
-	return row is not None
+    row = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name = ?",
+        (table_name,),
+    ).fetchone()
+    return row is not None
 
 
 def _get_table_columns(conn: sqlite3.Connection, table_name: str) -> set[str]:
-	rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
-	return {row[1] for row in rows}
+    rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    return {row[1] for row in rows}
 
 
 def _quote_identifier(identifier: str) -> str:
-	return '"' + identifier.replace('"', '""') + '"'
+    return '"' + identifier.replace('"', '""') + '"'
 
 
 def _resolve_column_name(available_columns: set[str], requested: str) -> str | None:
-	"""Resolve a requested column name against real SQLite columns.
+    """Resolve a requested column name against real SQLite columns.
 
-	Some VAST columns contain trailing spaces in the schema. We accept exact
-	matches first, then a unique stripped match.
-	"""
-	if requested in available_columns:
-		return requested
+    Some VAST columns contain trailing spaces in the schema. We accept exact
+    matches first, then a unique stripped match.
+    """
+    if requested in available_columns:
+        return requested
 
-	stripped = requested.strip()
-	if stripped in available_columns:
-		return stripped
+    stripped = requested.strip()
+    if stripped in available_columns:
+        return stripped
 
-	matches = [col for col in available_columns if col.strip() == stripped]
-	if len(matches) == 1:
-		return matches[0]
-	return None
+    matches = [col for col in available_columns if col.strip() == stripped]
+    if len(matches) == 1:
+        return matches[0]
+    return None
 
 
 def _parse_table_ref(ref: str) -> tuple[str, str] | None:
-	if not isinstance(ref, str) or "." not in ref:
-		return None
-	alias, col = ref.split(".", 1)
-	alias = alias.strip()
-	col = col.strip()
-	if not _is_valid_identifier(alias) or not col:
-		return None
-	return alias, col
+    if not isinstance(ref, str) or "." not in ref:
+        return None
+    alias, col = ref.split(".", 1)
+    alias = alias.strip()
+    col = col.strip()
+    if not _is_valid_identifier(alias) or not col:
+        return None
+    return alias, col
 
 
 def _load_prefixed_table(
-	conn: sqlite3.Connection,
-	table_name: str,
-	alias: str,
-	columns: list[str],
-	row_limit: int | None = None,
+    conn: sqlite3.Connection,
+    table_name: str,
+    alias: str,
+    columns: list[str],
+    row_limit: int | None = None,
 ) -> tuple[pd.DataFrame, dict[str, str]]:
-	available_columns = _get_table_columns(conn, table_name)
-	resolved_columns: list[str] = []
-	for col in columns:
-		actual = _resolve_column_name(available_columns, col)
-		if actual is None:
-			raise ValueError(f"Column '{col}' not found in '{table_name}'")
-		if actual not in resolved_columns:
-			resolved_columns.append(actual)
+    available_columns = _get_table_columns(conn, table_name)
+    resolved_columns: list[str] = []
+    for col in columns:
+        actual = _resolve_column_name(available_columns, col)
+        if actual is None:
+            raise ValueError(f"Column '{col}' not found in '{table_name}'")
+        if actual not in resolved_columns:
+            resolved_columns.append(actual)
 
-	if not resolved_columns:
-		raise ValueError(f"No columns selected for table '{table_name}'")
+    if not resolved_columns:
+        raise ValueError(f"No columns selected for table '{table_name}'")
 
-	select_sql = ", ".join(_quote_identifier(col) for col in resolved_columns)
-	query = f"SELECT {select_sql} FROM {_quote_identifier(table_name)}"
-	params: tuple[object, ...] = ()
-	if row_limit is not None:
-		query += " LIMIT ?"
-		params = (int(row_limit),)
-	df = pd.read_sql_query(query, conn, params=params)
-	renamed = {col: f"{alias}__{col}" for col in resolved_columns}
-	df = df.rename(columns=renamed)
-	return df, renamed
+    select_sql = ", ".join(_quote_identifier(col) for col in resolved_columns)
+    query = f"SELECT {select_sql} FROM {_quote_identifier(table_name)}"
+    params: tuple[object, ...] = ()
+    if row_limit is not None:
+        query += " LIMIT ?"
+        params = (int(row_limit),)
+    df = pd.read_sql_query(query, conn, params=params)
+    renamed = {col: f"{alias}__{col}" for col in resolved_columns}
+    df = df.rename(columns=renamed)
+    return df, renamed
 
 
 class JoinRequestError(Exception):
-	def __init__(self, message: str, status_code: int = 400):
-		super().__init__(message)
-		self.message = message
-		self.status_code = status_code
+    def __init__(self, message: str, status_code: int = 400):
+        super().__init__(message)
+        self.message = message
+        self.status_code = status_code
 
 
-def _build_joined_dataframe(payload: dict) -> tuple[pd.DataFrame, dict[str, dict], list[dict]]:
-	"""Build a joined DataFrame from a multi-table join request payload."""
-	if not DB_PATH.exists():
-		raise JoinRequestError(f"Database file not found: {DB_PATH}", 404)
+def _build_joined_dataframe(
+    payload: dict,
+) -> tuple[pd.DataFrame, dict[str, dict], list[dict]]:
+    """Build a joined DataFrame from a multi-table join request payload."""
+    if not DB_PATH.exists():
+        raise JoinRequestError(f"Database file not found: {DB_PATH}", 404)
 
-	tables = payload.get("tables", [])
-	joins = payload.get("joins", [])
-	select_cols = payload.get("select", [])
-	limit = payload.get("limit", 1000)
+    tables = payload.get("tables", [])
+    joins = payload.get("joins", [])
+    select_cols = payload.get("select", [])
+    limit = payload.get("limit", 1000)
 
-	if not isinstance(tables, list) or len(tables) < 2:
-		raise JoinRequestError("'tables' must contain at least two table specs.")
-	if not isinstance(joins, list) or not joins:
-		raise JoinRequestError("'joins' must be a non-empty list.")
+    if not isinstance(tables, list) or len(tables) < 2:
+        raise JoinRequestError("'tables' must contain at least two table specs.")
+    if not isinstance(joins, list) or not joins:
+        raise JoinRequestError("'joins' must be a non-empty list.")
 
-	try:
-		limit = int(limit)
-	except (TypeError, ValueError):
-		raise JoinRequestError("'limit' must be an integer.")
-	if limit <= 0:
-		raise JoinRequestError("'limit' must be greater than 0.")
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError):
+        raise JoinRequestError("'limit' must be an integer.")
+    if limit <= 0:
+        raise JoinRequestError("'limit' must be greater than 0.")
 
-	table_specs: dict[str, dict] = {}
-	for table_spec in tables:
-		if not isinstance(table_spec, dict):
-			raise JoinRequestError("Each table spec must be an object.")
-		table_name = table_spec.get("name")
-		alias = table_spec.get("alias") or table_name
-		if not isinstance(table_name, str) or not _is_valid_identifier(table_name):
-			raise JoinRequestError(f"Invalid table name: {table_name}")
-		if not isinstance(alias, str) or not _is_valid_identifier(alias):
-			raise JoinRequestError(f"Invalid alias for table '{table_name}'.")
-		if alias in table_specs:
-			raise JoinRequestError(f"Duplicate table alias: {alias}")
-		columns = table_spec.get("columns", [])
-		if columns is not None and not isinstance(columns, list):
-			raise JoinRequestError(f"'columns' must be a list for table '{table_name}'.")
-		table_specs[alias] = {
-			"name": table_name,
-			"alias": alias,
-			"columns": list(columns or []),
-		}
+    table_specs: dict[str, dict] = {}
+    for table_spec in tables:
+        if not isinstance(table_spec, dict):
+            raise JoinRequestError("Each table spec must be an object.")
+        table_name = table_spec.get("name")
+        alias = table_spec.get("alias") or table_name
+        if not isinstance(table_name, str) or not _is_valid_identifier(table_name):
+            raise JoinRequestError(f"Invalid table name: {table_name}")
+        if not isinstance(alias, str) or not _is_valid_identifier(alias):
+            raise JoinRequestError(f"Invalid alias for table '{table_name}'.")
+        if alias in table_specs:
+            raise JoinRequestError(f"Duplicate table alias: {alias}")
+        columns = table_spec.get("columns", [])
+        if columns is not None and not isinstance(columns, list):
+            raise JoinRequestError(
+                f"'columns' must be a list for table '{table_name}'."
+            )
+        table_specs[alias] = {
+            "name": table_name,
+            "alias": alias,
+            "columns": list(columns or []),
+        }
 
-	required_columns: dict[str, set[str]] = {alias: set(spec["columns"]) for alias, spec in table_specs.items()}
-	validated_joins: list[dict] = []
-	allowed_join_types = {"inner", "left", "right", "outer"}
+    required_columns: dict[str, set[str]] = {
+        alias: set(spec["columns"]) for alias, spec in table_specs.items()
+    }
+    validated_joins: list[dict] = []
+    allowed_join_types = {"inner", "left", "right", "outer"}
 
-	for join_spec in joins:
-		if not isinstance(join_spec, dict):
-			raise JoinRequestError("Each join spec must be an object.")
-		left_ref = _parse_table_ref(join_spec.get("left", ""))
-		right_ref = _parse_table_ref(join_spec.get("right", ""))
-		if left_ref is None or right_ref is None:
-			raise JoinRequestError("Join refs must use 'alias.column' syntax.")
-		left_alias, left_col = left_ref
-		right_alias, right_col = right_ref
-		if left_alias not in table_specs or right_alias not in table_specs:
-			raise JoinRequestError(f"Unknown table alias in join: {left_alias} -> {right_alias}")
-		how = (join_spec.get("how") or "inner").lower()
-		if how not in allowed_join_types:
-			raise JoinRequestError(f"Unsupported join type: {how}")
-		required_columns[left_alias].add(left_col)
-		required_columns[right_alias].add(right_col)
-		validated_joins.append({"left": left_ref, "right": right_ref, "how": how})
+    for join_spec in joins:
+        if not isinstance(join_spec, dict):
+            raise JoinRequestError("Each join spec must be an object.")
+        left_ref = _parse_table_ref(join_spec.get("left", ""))
+        right_ref = _parse_table_ref(join_spec.get("right", ""))
+        if left_ref is None or right_ref is None:
+            raise JoinRequestError("Join refs must use 'alias.column' syntax.")
+        left_alias, left_col = left_ref
+        right_alias, right_col = right_ref
+        if left_alias not in table_specs or right_alias not in table_specs:
+            raise JoinRequestError(
+                f"Unknown table alias in join: {left_alias} -> {right_alias}"
+            )
+        how = (join_spec.get("how") or "inner").lower()
+        if how not in allowed_join_types:
+            raise JoinRequestError(f"Unsupported join type: {how}")
+        required_columns[left_alias].add(left_col)
+        required_columns[right_alias].add(right_col)
+        validated_joins.append({"left": left_ref, "right": right_ref, "how": how})
 
-	conn = _get_db_connection()
-	try:
-		loaded: dict[str, pd.DataFrame] = {}
-		load_limit = max(int(limit), min(int(limit) * 10, 5000))
-		for alias, spec in table_specs.items():
-			if not _table_exists(conn, spec["name"]):
-				raise JoinRequestError(f"Table '{spec['name']}' does not exist.", 404)
-			df, _ = _load_prefixed_table(
-				conn,
-				spec["name"],
-				alias,
-				list(required_columns[alias]),
-				row_limit=load_limit,
-			)
-			if df.empty:
-				raise JoinRequestError(f"Table '{spec['name']}' returned no rows.", 404)
-			loaded[alias] = df
-	finally:
-		conn.close()
+    conn = _get_db_connection()
+    try:
+        loaded: dict[str, pd.DataFrame] = {}
+        load_limit = max(int(limit), min(int(limit) * 10, 5000))
+        for alias, spec in table_specs.items():
+            if not _table_exists(conn, spec["name"]):
+                raise JoinRequestError(f"Table '{spec['name']}' does not exist.", 404)
+            df, _ = _load_prefixed_table(
+                conn,
+                spec["name"],
+                alias,
+                list(required_columns[alias]),
+                row_limit=load_limit,
+            )
+            if df.empty:
+                raise JoinRequestError(f"Table '{spec['name']}' returned no rows.", 404)
+            loaded[alias] = df
+    finally:
+        conn.close()
 
-	base_alias = next(iter(table_specs.keys()))
-	joined = loaded[base_alias].copy()
-	joined_aliases = {base_alias}
+    base_alias = next(iter(table_specs.keys()))
+    joined = loaded[base_alias].copy()
+    joined_aliases = {base_alias}
 
-	def _prefixed_key(df: pd.DataFrame, alias: str, requested_col: str) -> str | None:
-		available = {c.split("__", 1)[1] for c in df.columns if c.startswith(f"{alias}__")}
-		actual_col = _resolve_column_name(available, requested_col)
-		if actual_col is None:
-			return None
-		return f"{alias}__{actual_col}"
+    def _prefixed_key(df: pd.DataFrame, alias: str, requested_col: str) -> str | None:
+        available = {
+            c.split("__", 1)[1] for c in df.columns if c.startswith(f"{alias}__")
+        }
+        actual_col = _resolve_column_name(available, requested_col)
+        if actual_col is None:
+            return None
+        return f"{alias}__{actual_col}"
 
-	for join_spec in validated_joins:
-		(left_alias, left_col) = join_spec["left"]
-		(right_alias, right_col) = join_spec["right"]
-		if left_alias not in joined_aliases:
-			raise JoinRequestError(f"Join order problem: '{left_alias}' is not present in the current joined data.")
-		right_df = loaded[right_alias]
-		left_key = _prefixed_key(joined, left_alias, left_col)
-		right_key = _prefixed_key(right_df, right_alias, right_col)
-		if left_key is None:
-			raise JoinRequestError(f"Missing join key in current result: {join_spec['left'][0]}.{left_col}")
-		if right_key is None:
-			raise JoinRequestError(f"Missing join key in table '{right_alias}': {join_spec['right'][0]}.{right_col}")
-		joined = pd.merge(joined, right_df, left_on=left_key, right_on=right_key, how=join_spec["how"])
-		joined_aliases.add(right_alias)
+    for join_spec in validated_joins:
+        (left_alias, left_col) = join_spec["left"]
+        (right_alias, right_col) = join_spec["right"]
+        if left_alias not in joined_aliases:
+            raise JoinRequestError(
+                f"Join order problem: '{left_alias}' is not present in the current joined data."
+            )
+        right_df = loaded[right_alias]
+        left_key = _prefixed_key(joined, left_alias, left_col)
+        right_key = _prefixed_key(right_df, right_alias, right_col)
+        if left_key is None:
+            raise JoinRequestError(
+                f"Missing join key in current result: {join_spec['left'][0]}.{left_col}"
+            )
+        if right_key is None:
+            raise JoinRequestError(
+                f"Missing join key in table '{right_alias}': {join_spec['right'][0]}.{right_col}"
+            )
+        joined = pd.merge(
+            joined, right_df, left_on=left_key, right_on=right_key, how=join_spec["how"]
+        )
+        joined_aliases.add(right_alias)
 
-	if select_cols:
-		if not isinstance(select_cols, list):
-			raise JoinRequestError("'select' must be a list when provided.")
-		resolved_select = []
-		for item in select_cols:
-			ref = _parse_table_ref(item)
-			if ref is None:
-				raise JoinRequestError(f"Select columns must use 'alias.column' syntax: {item}")
-			alias, col = ref
-			if alias not in table_specs:
-				raise JoinRequestError(f"Unknown alias in select: {alias}")
-			actual_col = _resolve_column_name(
-				{c.split("__", 1)[1] for c in joined.columns if c.startswith(f"{alias}__")},
-				col,
-			)
-			if actual_col is None:
-				raise JoinRequestError(f"Column not available in joined result: {item}")
-			resolved_select.append(f"{alias}__{actual_col}")
-		joined = joined[resolved_select]
+    if select_cols:
+        if not isinstance(select_cols, list):
+            raise JoinRequestError("'select' must be a list when provided.")
+        resolved_select = []
+        for item in select_cols:
+            ref = _parse_table_ref(item)
+            if ref is None:
+                raise JoinRequestError(
+                    f"Select columns must use 'alias.column' syntax: {item}"
+                )
+            alias, col = ref
+            if alias not in table_specs:
+                raise JoinRequestError(f"Unknown alias in select: {alias}")
+            actual_col = _resolve_column_name(
+                {
+                    c.split("__", 1)[1]
+                    for c in joined.columns
+                    if c.startswith(f"{alias}__")
+                },
+                col,
+            )
+            if actual_col is None:
+                raise JoinRequestError(f"Column not available in joined result: {item}")
+            resolved_select.append(f"{alias}__{actual_col}")
+        joined = joined[resolved_select]
 
-	joined = joined.head(limit)
-	if joined.empty:
-		raise JoinRequestError("No rows after joining.", 404)
+    joined = joined.head(limit)
+    if joined.empty:
+        raise JoinRequestError("No rows after joining.", 404)
 
-	return joined, table_specs, validated_joins
+    return joined, table_specs, validated_joins
 
 
 def _resolve_join_chart_column(joined: pd.DataFrame, ref: str) -> str | None:
-	parsed = _parse_table_ref(ref)
-	if parsed is None:
-		return ref if ref in joined.columns else None
-	alias, col = parsed
-	available = {c.split("__", 1)[1] for c in joined.columns if c.startswith(f"{alias}__")}
-	actual = _resolve_column_name(available, col)
-	if actual is None:
-		return None
-	return f"{alias}__{actual}"
+    parsed = _parse_table_ref(ref)
+    if parsed is None:
+        return ref if ref in joined.columns else None
+    alias, col = parsed
+    available = {
+        c.split("__", 1)[1] for c in joined.columns if c.startswith(f"{alias}__")
+    }
+    actual = _resolve_column_name(available, col)
+    if actual is None:
+        return None
+    return f"{alias}__{actual}"
 
 
-def _render_joined_chart_html(joined: pd.DataFrame, chart: str, columns: list[str], title: str) -> str:
-	chart = chart.lower()
-	d3 = D3Blocks()
-	if chart == "scatter":
-		if len(columns) < 2:
-			raise JoinRequestError("Scatter chart requires at least 2 chart columns.")
-		x_col = _resolve_join_chart_column(joined, columns[0])
-		y_col = _resolve_join_chart_column(joined, columns[1])
-		if x_col is None or y_col is None:
-			raise JoinRequestError("Chart columns not found in joined result.")
-		scatter_df = joined[[x_col, y_col]].copy()
-		scatter_df[x_col] = pd.to_numeric(scatter_df[x_col], errors="coerce")
-		scatter_df[y_col] = pd.to_numeric(scatter_df[y_col], errors="coerce")
-		scatter_df = scatter_df.dropna(subset=[x_col, y_col])
-		if scatter_df.shape[0] < 2:
-			raise JoinRequestError("Not enough numeric rows for scatter chart.")
-		return d3.scatter(
-			scatter_df[x_col].to_numpy(),
-			scatter_df[y_col].to_numpy(),
-			showfig=False,
-			return_html=True,
-			title=title,
-		)
+def _render_joined_chart_html(
+    joined: pd.DataFrame, chart: str, columns: list[str], title: str
+) -> str:
+    chart = chart.lower()
+    d3 = D3Blocks()
+    if chart == "scatter":
+        if len(columns) < 2:
+            raise JoinRequestError("Scatter chart requires at least 2 chart columns.")
+        x_col = _resolve_join_chart_column(joined, columns[0])
+        y_col = _resolve_join_chart_column(joined, columns[1])
+        if x_col is None or y_col is None:
+            raise JoinRequestError("Chart columns not found in joined result.")
+        scatter_df = joined[[x_col, y_col]].copy()
+        scatter_df[x_col] = pd.to_numeric(scatter_df[x_col], errors="coerce")
+        scatter_df[y_col] = pd.to_numeric(scatter_df[y_col], errors="coerce")
+        scatter_df = scatter_df.dropna(subset=[x_col, y_col])
+        if scatter_df.shape[0] < 2:
+            raise JoinRequestError("Not enough numeric rows for scatter chart.")
+        return d3.scatter(
+            scatter_df[x_col].to_numpy(),
+            scatter_df[y_col].to_numpy(),
+            showfig=False,
+            return_html=True,
+            title=title,
+        )
 
-	if chart == "heatmap":
-		if len(columns) < 2:
-			raise JoinRequestError("Heatmap requires at least 2 chart columns.")
-		x_col = _resolve_join_chart_column(joined, columns[0])
-		y_col = _resolve_join_chart_column(joined, columns[1])
-		if x_col is None or y_col is None:
-			raise JoinRequestError("Chart columns not found in joined result.")
-		pivot = (
-			joined.groupby([x_col, y_col])
-			.size()
-			.reset_index(name="count")
-			.pivot(index=x_col, columns=y_col, values="count")
-			.fillna(0)
-		)
-		return d3.heatmap(
-			pivot,
-			color=None,
-			showfig=False,
-			return_html=True,
-			title=title,
-		)
+    if chart == "heatmap":
+        if len(columns) < 2:
+            raise JoinRequestError("Heatmap requires at least 2 chart columns.")
+        x_col = _resolve_join_chart_column(joined, columns[0])
+        y_col = _resolve_join_chart_column(joined, columns[1])
+        if x_col is None or y_col is None:
+            raise JoinRequestError("Chart columns not found in joined result.")
+        pivot = (
+            joined.groupby([x_col, y_col])
+            .size()
+            .reset_index(name="count")
+            .pivot(index=x_col, columns=y_col, values="count")
+            .fillna(0)
+        )
+        return d3.heatmap(
+            pivot,
+            color=None,
+            showfig=False,
+            return_html=True,
+            title=title,
+        )
 
-	raise JoinRequestError(f"Unsupported chart type: {chart}")
+    raise JoinRequestError(f"Unsupported chart type: {chart}")
 
 
-def _render_synced_joined_views_html(joined: pd.DataFrame, views: list[dict], title: str) -> str:
-	"""Render multiple synced charts from a joined DataFrame.
+def _render_synced_joined_views_html(
+    joined: pd.DataFrame, views: list[dict], title: str
+) -> str:
+    """Render multiple synced charts from a joined DataFrame.
 
-	Supported view types:
-	- scatter: x/y numeric points
-	- line: sorted x/y line with points
-	- heatmap: binned x/y cells
-	- histogram: one numeric x variable, binned counts
-	- bar: categorical x variable, count or mean(y)
-	"""
-	if not views or not isinstance(views, list):
-		raise JoinRequestError("'views' must be a non-empty list.")
+    Supported view types:
+    - scatter: x/y numeric points
+    - line: sorted x/y line with points
+    - heatmap: binned x/y cells
+    - histogram: one numeric x variable, binned counts
+    - bar: categorical x variable, count or mean(y)
+    """
+    if not views or not isinstance(views, list):
+        raise JoinRequestError("'views' must be a non-empty list.")
 
-	joined = joined.reset_index(drop=True).copy()
-	joined["__row_id"] = joined.index.astype(int)
-	row_ids = joined["__row_id"].tolist()
-	palette = [
-		"#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
-		"#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
-	]
+    joined = joined.reset_index(drop=True).copy()
+    joined["__row_id"] = joined.index.astype(int)
+    row_ids = joined["__row_id"].tolist()
+    palette = [
+        "#1f77b4",
+        "#ff7f0e",
+        "#2ca02c",
+        "#d62728",
+        "#9467bd",
+        "#8c564b",
+        "#e377c2",
+        "#7f7f7f",
+        "#bcbd22",
+        "#17becf",
+    ]
 
-	chart_payloads = []
-	for idx, view in enumerate(views):
-		if not isinstance(view, dict):
-			raise JoinRequestError("Each view must be an object.")
+    chart_payloads = []
+    for idx, view in enumerate(views):
+        if not isinstance(view, dict):
+            raise JoinRequestError("Each view must be an object.")
 
-		view_type = (view.get("type") or "scatter").lower()
-		title_text = view.get("title") or f"View {idx + 1}"
-		x_ref = view.get("x")
-		y_ref = view.get("y")
+        view_type = (view.get("type") or "scatter").lower()
+        title_text = view.get("title") or f"View {idx + 1}"
+        x_ref = view.get("x")
+        y_ref = view.get("y")
 
-		if view_type in {"scatter", "line", "area", "step"}:
-			if not x_ref or not y_ref:
-				raise JoinRequestError(f"Each {view_type} view requires 'x' and 'y'.")
-			x_col = _resolve_join_chart_column(joined, x_ref)
-			y_col = _resolve_join_chart_column(joined, y_ref)
-			if x_col is None or y_col is None:
-				raise JoinRequestError(f"View {idx + 1} columns not found in joined result.")
-			chart_rows = joined[["__row_id", x_col, y_col]].copy()
-			chart_rows[x_col] = pd.to_numeric(chart_rows[x_col], errors="coerce")
-			chart_rows[y_col] = pd.to_numeric(chart_rows[y_col], errors="coerce")
-			chart_rows = chart_rows.dropna(subset=[x_col, y_col])
-			if chart_rows.shape[0] < 2:
-				raise JoinRequestError(f"View {idx + 1} does not have enough numeric rows.")
-			if view_type == "line":
-				chart_rows = chart_rows.sort_values(by=x_col)
-			chart_payloads.append(
-				{
-					"type": view_type,
-					"title": title_text,
-					"xLabel": x_ref,
-					"yLabel": y_ref,
-					"points": [
-						{
-							"rowId": int(row["__row_id"]),
-							"x": float(row[x_col]),
-							"y": float(row[y_col]),
-						}
-						for _, row in chart_rows.iterrows()
-					],
-				}
-			)
+        if view_type in {"scatter", "line", "area", "step"}:
+            if not x_ref or not y_ref:
+                raise JoinRequestError(f"Each {view_type} view requires 'x' and 'y'.")
+            x_col = _resolve_join_chart_column(joined, x_ref)
+            y_col = _resolve_join_chart_column(joined, y_ref)
+            if x_col is None or y_col is None:
+                raise JoinRequestError(
+                    f"View {idx + 1} columns not found in joined result."
+                )
+            chart_rows = joined[["__row_id", x_col, y_col]].copy()
+            chart_rows[x_col] = pd.to_numeric(chart_rows[x_col], errors="coerce")
+            chart_rows[y_col] = pd.to_numeric(chart_rows[y_col], errors="coerce")
+            chart_rows = chart_rows.dropna(subset=[x_col, y_col])
+            if chart_rows.shape[0] < 2:
+                raise JoinRequestError(
+                    f"View {idx + 1} does not have enough numeric rows."
+                )
+            if view_type == "line":
+                chart_rows = chart_rows.sort_values(by=x_col)
+            chart_payloads.append(
+                {
+                    "type": view_type,
+                    "title": title_text,
+                    "xLabel": x_ref,
+                    "yLabel": y_ref,
+                    "points": [
+                        {
+                            "rowId": int(row["__row_id"]),
+                            "x": float(row[x_col]),
+                            "y": float(row[y_col]),
+                        }
+                        for _, row in chart_rows.iterrows()
+                    ],
+                }
+            )
 
-		elif view_type == "boxplot":
-			if not x_ref or not y_ref:
-				raise JoinRequestError("Each boxplot view requires 'x' and 'y'.")
-			x_col = _resolve_join_chart_column(joined, x_ref)
-			y_col = _resolve_join_chart_column(joined, y_ref)
-			if x_col is None or y_col is None:
-				raise JoinRequestError(f"View {idx + 1} columns not found in joined result.")
-			chart_rows = joined[["__row_id", x_col, y_col]].copy()
-			chart_rows[y_col] = pd.to_numeric(chart_rows[y_col], errors="coerce")
-			chart_rows = chart_rows.dropna(subset=[y_col])
-			if chart_rows.shape[0] < 2:
-				raise JoinRequestError(f"View {idx + 1} does not have enough numeric rows.")
-			groups = []
-			for category, group in chart_rows.groupby(x_col):
-				values = group[y_col].astype(float).tolist()
-				if len(values) < 2:
-					continue
-				qs = group[y_col].quantile([0, 0.25, 0.5, 0.75, 1.0]).tolist()
-				groups.append(
-					{
-						"category": str(category),
-						"rowIds": [int(v) for v in group["__row_id"].tolist()],
-						"values": values,
-						"min": float(qs[0]),
-						"q1": float(qs[1]),
-						"median": float(qs[2]),
-						"q3": float(qs[3]),
-						"max": float(qs[4]),
-					}
-				)
-			if not groups:
-				raise JoinRequestError(f"View {idx + 1} does not have enough grouped rows.")
-			chart_payloads.append(
-				{
-					"type": "boxplot",
-					"title": title_text,
-					"xLabel": x_ref,
-					"yLabel": y_ref,
-					"groups": groups,
-				}
-			)
+        elif view_type == "boxplot":
+            if not x_ref or not y_ref:
+                raise JoinRequestError("Each boxplot view requires 'x' and 'y'.")
+            x_col = _resolve_join_chart_column(joined, x_ref)
+            y_col = _resolve_join_chart_column(joined, y_ref)
+            if x_col is None or y_col is None:
+                raise JoinRequestError(
+                    f"View {idx + 1} columns not found in joined result."
+                )
+            chart_rows = joined[["__row_id", x_col, y_col]].copy()
+            chart_rows[y_col] = pd.to_numeric(chart_rows[y_col], errors="coerce")
+            chart_rows = chart_rows.dropna(subset=[y_col])
+            if chart_rows.shape[0] < 2:
+                raise JoinRequestError(
+                    f"View {idx + 1} does not have enough numeric rows."
+                )
+            groups = []
+            for category, group in chart_rows.groupby(x_col):
+                values = group[y_col].astype(float).tolist()
+                if len(values) < 2:
+                    continue
+                qs = group[y_col].quantile([0, 0.25, 0.5, 0.75, 1.0]).tolist()
+                groups.append(
+                    {
+                        "category": str(category),
+                        "rowIds": [int(v) for v in group["__row_id"].tolist()],
+                        "values": values,
+                        "min": float(qs[0]),
+                        "q1": float(qs[1]),
+                        "median": float(qs[2]),
+                        "q3": float(qs[3]),
+                        "max": float(qs[4]),
+                    }
+                )
+            if not groups:
+                raise JoinRequestError(
+                    f"View {idx + 1} does not have enough grouped rows."
+                )
+            chart_payloads.append(
+                {
+                    "type": "boxplot",
+                    "title": title_text,
+                    "xLabel": x_ref,
+                    "yLabel": y_ref,
+                    "groups": groups,
+                }
+            )
 
-		elif view_type == "circlepack":
-			if not x_ref:
-				raise JoinRequestError("Each circlepack view requires 'x'.")
-			x_col = _resolve_join_chart_column(joined, x_ref)
-			if x_col is None:
-				raise JoinRequestError(f"View {idx + 1} column not found in joined result.")
-			chart_rows = joined[["__row_id", x_col]].copy()
-			chart_rows[x_col] = chart_rows[x_col].astype(str).fillna("(missing)")
-			groups = (
-				chart_rows.groupby(x_col)
-				.agg(count=("__row_id", "size"), rowIds=("__row_id", lambda s: [int(v) for v in s.tolist()]))
-				.reset_index()
-			)
-			if groups.empty:
-				raise JoinRequestError(f"View {idx + 1} does not have enough rows.")
-			chart_payloads.append(
-				{
-					"type": "circlepack",
-					"title": title_text,
-					"xLabel": x_ref,
-					"groups": [
-						{
-							"category": str(row[x_col]),
-							"count": int(row["count"]),
-							"rowIds": row["rowIds"],
-						}
-						for _, row in groups.iterrows()
-					],
-				}
-			)
+        elif view_type == "circlepack":
+            if not x_ref:
+                raise JoinRequestError("Each circlepack view requires 'x'.")
+            x_col = _resolve_join_chart_column(joined, x_ref)
+            if x_col is None:
+                raise JoinRequestError(
+                    f"View {idx + 1} column not found in joined result."
+                )
+            chart_rows = joined[["__row_id", x_col]].copy()
+            chart_rows[x_col] = chart_rows[x_col].astype(str).fillna("(missing)")
+            groups = (
+                chart_rows.groupby(x_col)
+                .agg(
+                    count=("__row_id", "size"),
+                    rowIds=("__row_id", lambda s: [int(v) for v in s.tolist()]),
+                )
+                .reset_index()
+            )
+            if groups.empty:
+                raise JoinRequestError(f"View {idx + 1} does not have enough rows.")
+            chart_payloads.append(
+                {
+                    "type": "circlepack",
+                    "title": title_text,
+                    "xLabel": x_ref,
+                    "groups": [
+                        {
+                            "category": str(row[x_col]),
+                            "count": int(row["count"]),
+                            "rowIds": row["rowIds"],
+                        }
+                        for _, row in groups.iterrows()
+                    ],
+                }
+            )
 
-		elif view_type == "chord":
-			if not x_ref or not y_ref:
-				raise JoinRequestError("Each chord view requires 'x' and 'y'.")
-			x_col = _resolve_join_chart_column(joined, x_ref)
-			y_col = _resolve_join_chart_column(joined, y_ref)
-			if x_col is None or y_col is None:
-				raise JoinRequestError(f"View {idx + 1} columns not found in joined result.")
-			chart_rows = joined[["__row_id", x_col, y_col]].copy()
-			chart_rows[x_col] = chart_rows[x_col].astype(str).fillna("(missing)")
-			chart_rows[y_col] = chart_rows[y_col].astype(str).fillna("(missing)")
-			categories = sorted(set(chart_rows[x_col].unique()).union(set(chart_rows[y_col].unique())))
-			if len(categories) < 2:
-				raise JoinRequestError(f"View {idx + 1} does not have enough distinct categories.")
-			index_map = {cat: i for i, cat in enumerate(categories)}
-			matrix = [[0 for _ in categories] for _ in categories]
-			row_ids_map: dict[str, list[int]] = {}
-			for _, row in chart_rows.iterrows():
-				i = index_map[str(row[x_col])]
-				j = index_map[str(row[y_col])]
-				matrix[i][j] += 1
-				key = f"{i}-{j}"
-				row_ids_map.setdefault(key, []).append(int(row["__row_id"]))
-			chart_payloads.append(
-				{
-					"type": "chord",
-					"title": title_text,
-					"xLabel": x_ref,
-					"yLabel": y_ref,
-					"categories": categories,
-					"matrix": matrix,
-					"rowIdsMap": row_ids_map,
-				}
-			)
+        elif view_type == "chord":
+            if not x_ref or not y_ref:
+                raise JoinRequestError("Each chord view requires 'x' and 'y'.")
+            x_col = _resolve_join_chart_column(joined, x_ref)
+            y_col = _resolve_join_chart_column(joined, y_ref)
+            if x_col is None or y_col is None:
+                raise JoinRequestError(
+                    f"View {idx + 1} columns not found in joined result."
+                )
+            chart_rows = joined[["__row_id", x_col, y_col]].copy()
+            chart_rows[x_col] = chart_rows[x_col].astype(str).fillna("(missing)")
+            chart_rows[y_col] = chart_rows[y_col].astype(str).fillna("(missing)")
+            categories = sorted(
+                set(chart_rows[x_col].unique()).union(set(chart_rows[y_col].unique()))
+            )
+            if len(categories) < 2:
+                raise JoinRequestError(
+                    f"View {idx + 1} does not have enough distinct categories."
+                )
+            index_map = {cat: i for i, cat in enumerate(categories)}
+            matrix = [[0 for _ in categories] for _ in categories]
+            row_ids_map: dict[str, list[int]] = {}
+            for _, row in chart_rows.iterrows():
+                i = index_map[str(row[x_col])]
+                j = index_map[str(row[y_col])]
+                matrix[i][j] += 1
+                key = f"{i}-{j}"
+                row_ids_map.setdefault(key, []).append(int(row["__row_id"]))
+            chart_payloads.append(
+                {
+                    "type": "chord",
+                    "title": title_text,
+                    "xLabel": x_ref,
+                    "yLabel": y_ref,
+                    "categories": categories,
+                    "matrix": matrix,
+                    "rowIdsMap": row_ids_map,
+                }
+            )
 
-		elif view_type == "violin":
-			if not x_ref or not y_ref:
-				raise JoinRequestError("Each violin view requires 'x' and 'y'.")
-			x_col = _resolve_join_chart_column(joined, x_ref)
-			y_col = _resolve_join_chart_column(joined, y_ref)
-			if x_col is None or y_col is None:
-				raise JoinRequestError(f"View {idx + 1} columns not found in joined result.")
-			chart_rows = joined[["__row_id", x_col, y_col]].copy()
-			chart_rows[x_col] = chart_rows[x_col].astype(str).fillna("(missing)")
-			chart_rows[y_col] = pd.to_numeric(chart_rows[y_col], errors="coerce")
-			chart_rows = chart_rows.dropna(subset=[y_col])
-			if chart_rows.shape[0] < 2:
-				raise JoinRequestError(f"View {idx + 1} does not have enough numeric rows.")
-			groups = []
-			for category, group in chart_rows.groupby(x_col):
-				values = group[y_col].astype(float).tolist()
-				if len(values) < 2:
-					continue
-				min_v = float(min(values))
-				max_v = float(max(values))
-				groups.append(
-					{
-						"category": str(category),
-						"rowIds": [int(v) for v in group["__row_id"].tolist()],
-						"values": values,
-						"min": min_v,
-						"max": max_v,
-					}
-				)
-			if not groups:
-				raise JoinRequestError(f"View {idx + 1} does not have enough grouped rows.")
-			chart_payloads.append(
-				{
-					"type": "violin",
-					"title": title_text,
-					"xLabel": x_ref,
-					"yLabel": y_ref,
-					"groups": groups,
-				}
-			)
+        elif view_type == "violin":
+            if not x_ref or not y_ref:
+                raise JoinRequestError("Each violin view requires 'x' and 'y'.")
+            x_col = _resolve_join_chart_column(joined, x_ref)
+            y_col = _resolve_join_chart_column(joined, y_ref)
+            if x_col is None or y_col is None:
+                raise JoinRequestError(
+                    f"View {idx + 1} columns not found in joined result."
+                )
+            chart_rows = joined[["__row_id", x_col, y_col]].copy()
+            chart_rows[x_col] = chart_rows[x_col].astype(str).fillna("(missing)")
+            chart_rows[y_col] = pd.to_numeric(chart_rows[y_col], errors="coerce")
+            chart_rows = chart_rows.dropna(subset=[y_col])
+            if chart_rows.shape[0] < 2:
+                raise JoinRequestError(
+                    f"View {idx + 1} does not have enough numeric rows."
+                )
+            groups = []
+            for category, group in chart_rows.groupby(x_col):
+                values = group[y_col].astype(float).tolist()
+                if len(values) < 2:
+                    continue
+                min_v = float(min(values))
+                max_v = float(max(values))
+                groups.append(
+                    {
+                        "category": str(category),
+                        "rowIds": [int(v) for v in group["__row_id"].tolist()],
+                        "values": values,
+                        "min": min_v,
+                        "max": max_v,
+                    }
+                )
+            if not groups:
+                raise JoinRequestError(
+                    f"View {idx + 1} does not have enough grouped rows."
+                )
+            chart_payloads.append(
+                {
+                    "type": "violin",
+                    "title": title_text,
+                    "xLabel": x_ref,
+                    "yLabel": y_ref,
+                    "groups": groups,
+                }
+            )
 
-		elif view_type == "heatmap":
-			if not x_ref or not y_ref:
-				raise JoinRequestError("Each heatmap view requires 'x' and 'y'.")
-			bins = int(view.get("bins", 8))
-			if bins <= 0:
-				raise JoinRequestError("Heatmap 'bins' must be greater than 0.")
-			x_col = _resolve_join_chart_column(joined, x_ref)
-			y_col = _resolve_join_chart_column(joined, y_ref)
-			if x_col is None or y_col is None:
-				raise JoinRequestError(f"View {idx + 1} columns not found in joined result.")
+        elif view_type == "heatmap":
+            if not x_ref or not y_ref:
+                raise JoinRequestError("Each heatmap view requires 'x' and 'y'.")
+            bins = int(view.get("bins", 8))
+            if bins <= 0:
+                raise JoinRequestError("Heatmap 'bins' must be greater than 0.")
+            x_col = _resolve_join_chart_column(joined, x_ref)
+            y_col = _resolve_join_chart_column(joined, y_ref)
+            if x_col is None or y_col is None:
+                raise JoinRequestError(
+                    f"View {idx + 1} columns not found in joined result."
+                )
 
-			chart_rows = joined[["__row_id", x_col, y_col]].copy()
-			chart_rows[x_col] = pd.to_numeric(chart_rows[x_col], errors="coerce")
-			chart_rows[y_col] = pd.to_numeric(chart_rows[y_col], errors="coerce")
-			chart_rows = chart_rows.dropna(subset=[x_col, y_col])
-			if chart_rows.shape[0] < 2:
-				raise JoinRequestError(f"View {idx + 1} does not have enough numeric rows.")
+            chart_rows = joined[["__row_id", x_col, y_col]].copy()
+            chart_rows[x_col] = pd.to_numeric(chart_rows[x_col], errors="coerce")
+            chart_rows[y_col] = pd.to_numeric(chart_rows[y_col], errors="coerce")
+            chart_rows = chart_rows.dropna(subset=[x_col, y_col])
+            if chart_rows.shape[0] < 2:
+                raise JoinRequestError(
+                    f"View {idx + 1} does not have enough numeric rows."
+                )
 
-			chart_rows["__xb"] = pd.cut(chart_rows[x_col], bins=bins, labels=False, duplicates="drop")
-			chart_rows["__yb"] = pd.cut(chart_rows[y_col], bins=bins, labels=False, duplicates="drop")
-			chart_rows = chart_rows.dropna(subset=["__xb", "__yb"])
-			if chart_rows.empty:
-				raise JoinRequestError(f"View {idx + 1} does not have enough binned rows.")
+            chart_rows["__xb"] = pd.cut(
+                chart_rows[x_col], bins=bins, labels=False, duplicates="drop"
+            )
+            chart_rows["__yb"] = pd.cut(
+                chart_rows[y_col], bins=bins, labels=False, duplicates="drop"
+            )
+            chart_rows = chart_rows.dropna(subset=["__xb", "__yb"])
+            if chart_rows.empty:
+                raise JoinRequestError(
+                    f"View {idx + 1} does not have enough binned rows."
+                )
 
-			chart_rows["__xb"] = chart_rows["__xb"].astype(int)
-			chart_rows["__yb"] = chart_rows["__yb"].astype(int)
-			pivot = (
-				chart_rows.groupby(["__xb", "__yb"])
-				.agg(count=("__row_id", "size"), rowIds=("__row_id", lambda s: [int(v) for v in s.tolist()]))
-				.reset_index()
-			)
+            chart_rows["__xb"] = chart_rows["__xb"].astype(int)
+            chart_rows["__yb"] = chart_rows["__yb"].astype(int)
+            pivot = (
+                chart_rows.groupby(["__xb", "__yb"])
+                .agg(
+                    count=("__row_id", "size"),
+                    rowIds=("__row_id", lambda s: [int(v) for v in s.tolist()]),
+                )
+                .reset_index()
+            )
 
-			chart_payloads.append(
-				{
-					"type": "heatmap",
-					"title": title_text,
-					"xLabel": x_ref,
-					"yLabel": y_ref,
-					"bins": bins,
-					"xDomain": [float(chart_rows[x_col].min()), float(chart_rows[x_col].max())],
-					"yDomain": [float(chart_rows[y_col].min()), float(chart_rows[y_col].max())],
-					"cells": [
-						{
-							"xBin": int(row["__xb"]),
-							"yBin": int(row["__yb"]),
-							"count": int(row["count"]),
-							"rowIds": row["rowIds"],
-						}
-						for _, row in pivot.iterrows()
-					],
-				}
-			)
+            chart_payloads.append(
+                {
+                    "type": "heatmap",
+                    "title": title_text,
+                    "xLabel": x_ref,
+                    "yLabel": y_ref,
+                    "bins": bins,
+                    "xDomain": [
+                        float(chart_rows[x_col].min()),
+                        float(chart_rows[x_col].max()),
+                    ],
+                    "yDomain": [
+                        float(chart_rows[y_col].min()),
+                        float(chart_rows[y_col].max()),
+                    ],
+                    "cells": [
+                        {
+                            "xBin": int(row["__xb"]),
+                            "yBin": int(row["__yb"]),
+                            "count": int(row["count"]),
+                            "rowIds": row["rowIds"],
+                        }
+                        for _, row in pivot.iterrows()
+                    ],
+                }
+            )
 
-		elif view_type == "histogram":
-			if not x_ref:
-				raise JoinRequestError("Each histogram view requires 'x'.")
-			bins = int(view.get("bins", 10))
-			if bins <= 0:
-				raise JoinRequestError("Histogram 'bins' must be greater than 0.")
-			x_col = _resolve_join_chart_column(joined, x_ref)
-			if x_col is None:
-				raise JoinRequestError(f"View {idx + 1} column not found in joined result.")
-			chart_rows = joined[["__row_id", x_col]].copy()
-			chart_rows[x_col] = pd.to_numeric(chart_rows[x_col], errors="coerce")
-			chart_rows = chart_rows.dropna(subset=[x_col])
-			if chart_rows.shape[0] < 2:
-				raise JoinRequestError(f"View {idx + 1} does not have enough numeric rows.")
-			chart_rows["__bin"] = pd.cut(chart_rows[x_col], bins=bins, labels=False, duplicates="drop")
-			chart_rows = chart_rows.dropna(subset=["__bin"])
-			chart_rows["__bin"] = chart_rows["__bin"].astype(int)
-			pivot = (
-				chart_rows.groupby("__bin")
-				.agg(count=("__row_id", "size"), rowIds=("__row_id", lambda s: [int(v) for v in s.tolist()]))
-				.reset_index()
-			)
-			chart_payloads.append(
-				{
-					"type": "histogram",
-					"title": title_text,
-					"xLabel": x_ref,
-					"bins": bins,
-					"domain": [float(chart_rows[x_col].min()), float(chart_rows[x_col].max())],
-					"bars": [
-						{
-							"bin": int(row["__bin"]),
-							"count": int(row["count"]),
-							"rowIds": row["rowIds"],
-						}
-						for _, row in pivot.iterrows()
-					],
-				}
-			)
+        elif view_type == "histogram":
+            if not x_ref:
+                raise JoinRequestError("Each histogram view requires 'x'.")
+            bins = int(view.get("bins", 10))
+            if bins <= 0:
+                raise JoinRequestError("Histogram 'bins' must be greater than 0.")
+            x_col = _resolve_join_chart_column(joined, x_ref)
+            if x_col is None:
+                raise JoinRequestError(
+                    f"View {idx + 1} column not found in joined result."
+                )
+            chart_rows = joined[["__row_id", x_col]].copy()
+            chart_rows[x_col] = pd.to_numeric(chart_rows[x_col], errors="coerce")
+            chart_rows = chart_rows.dropna(subset=[x_col])
+            if chart_rows.shape[0] < 2:
+                raise JoinRequestError(
+                    f"View {idx + 1} does not have enough numeric rows."
+                )
+            chart_rows["__bin"] = pd.cut(
+                chart_rows[x_col], bins=bins, labels=False, duplicates="drop"
+            )
+            chart_rows = chart_rows.dropna(subset=["__bin"])
+            chart_rows["__bin"] = chart_rows["__bin"].astype(int)
+            pivot = (
+                chart_rows.groupby("__bin")
+                .agg(
+                    count=("__row_id", "size"),
+                    rowIds=("__row_id", lambda s: [int(v) for v in s.tolist()]),
+                )
+                .reset_index()
+            )
+            chart_payloads.append(
+                {
+                    "type": "histogram",
+                    "title": title_text,
+                    "xLabel": x_ref,
+                    "bins": bins,
+                    "domain": [
+                        float(chart_rows[x_col].min()),
+                        float(chart_rows[x_col].max()),
+                    ],
+                    "bars": [
+                        {
+                            "bin": int(row["__bin"]),
+                            "count": int(row["count"]),
+                            "rowIds": row["rowIds"],
+                        }
+                        for _, row in pivot.iterrows()
+                    ],
+                }
+            )
 
-		elif view_type == "bar":
-			if not x_ref:
-				raise JoinRequestError("Each bar view requires 'x'.")
-			x_col = _resolve_join_chart_column(joined, x_ref)
-			if x_col is None:
-				raise JoinRequestError(f"View {idx + 1} column not found in joined result.")
-			chart_rows = joined[["__row_id", x_col] + ([ _resolve_join_chart_column(joined, y_ref) ] if y_ref else [])].copy()
-			chart_rows[x_col] = chart_rows[x_col].astype(str).fillna("(missing)")
-			if y_ref:
-				y_col = _resolve_join_chart_column(joined, y_ref)
-				if y_col is None:
-					raise JoinRequestError(f"View {idx + 1} y column not found in joined result.")
-				chart_rows[y_col] = pd.to_numeric(chart_rows[y_col], errors="coerce")
-				pivot = chart_rows.dropna(subset=[y_col]).groupby(x_col).agg(value=(y_col, "mean"), rowIds=("__row_id", lambda s: [int(v) for v in s.tolist()])).reset_index()
-				value_key = "value"
-			else:
-				pivot = chart_rows.groupby(x_col).agg(value=("__row_id", "size"), rowIds=("__row_id", lambda s: [int(v) for v in s.tolist()])).reset_index()
-				value_key = "value"
-			if pivot.empty:
-				raise JoinRequestError(f"View {idx + 1} does not have enough rows.")
-			chart_payloads.append(
-				{
-					"type": "bar",
-					"title": title_text,
-					"xLabel": x_ref,
-					"yLabel": y_ref,
-					"bars": [
-						{
-							"category": str(row[x_col]),
-							"value": float(row[value_key]),
-							"rowIds": row["rowIds"],
-						}
-						for _, row in pivot.iterrows()
-					],
-				}
-			)
+        elif view_type == "bar":
+            if not x_ref:
+                raise JoinRequestError("Each bar view requires 'x'.")
+            x_col = _resolve_join_chart_column(joined, x_ref)
+            if x_col is None:
+                raise JoinRequestError(
+                    f"View {idx + 1} column not found in joined result."
+                )
+            chart_rows = joined[
+                ["__row_id", x_col]
+                + ([_resolve_join_chart_column(joined, y_ref)] if y_ref else [])
+            ].copy()
+            chart_rows[x_col] = chart_rows[x_col].astype(str).fillna("(missing)")
+            if y_ref:
+                y_col = _resolve_join_chart_column(joined, y_ref)
+                if y_col is None:
+                    raise JoinRequestError(
+                        f"View {idx + 1} y column not found in joined result."
+                    )
+                chart_rows[y_col] = pd.to_numeric(chart_rows[y_col], errors="coerce")
+                pivot = (
+                    chart_rows.dropna(subset=[y_col])
+                    .groupby(x_col)
+                    .agg(
+                        value=(y_col, "mean"),
+                        rowIds=("__row_id", lambda s: [int(v) for v in s.tolist()]),
+                    )
+                    .reset_index()
+                )
+                value_key = "value"
+            else:
+                pivot = (
+                    chart_rows.groupby(x_col)
+                    .agg(
+                        value=("__row_id", "size"),
+                        rowIds=("__row_id", lambda s: [int(v) for v in s.tolist()]),
+                    )
+                    .reset_index()
+                )
+                value_key = "value"
+            if pivot.empty:
+                raise JoinRequestError(f"View {idx + 1} does not have enough rows.")
+            chart_payloads.append(
+                {
+                    "type": "bar",
+                    "title": title_text,
+                    "xLabel": x_ref,
+                    "yLabel": y_ref,
+                    "bars": [
+                        {
+                            "category": str(row[x_col]),
+                            "value": float(row[value_key]),
+                            "rowIds": row["rowIds"],
+                        }
+                        for _, row in pivot.iterrows()
+                    ],
+                }
+            )
 
-		else:
-			raise JoinRequestError(f"Unsupported view type: {view_type}")
+        else:
+            raise JoinRequestError(f"Unsupported view type: {view_type}")
 
-	import json
+    import json
 
-	page_template = """
+    page_template = """
 <!doctype html>
 <html>
 <head>
@@ -1216,184 +1334,227 @@ rowIds.slice(0, Math.min(rowIds.length, 12)).forEach((rowId) => {
 </html>
 """
 
-	return (
-		page_template
-		.replace("__TITLE__", title)
-		.replace("__PALETTE__", json.dumps(palette))
-		.replace("__VIEWS__", json.dumps(chart_payloads))
-	)
+    return (
+        page_template.replace("__TITLE__", title)
+        .replace("__PALETTE__", json.dumps(palette))
+        .replace("__VIEWS__", json.dumps(chart_payloads))
+    )
 
 
 @app.route("/api/join", methods=["POST"])
 def join_tables():
-	"""Join multiple SQLite tables via a JSON request.
+    """Join multiple SQLite tables via a JSON request.
 
-	Request JSON:
-	{
-	  "tables": [
-	    {"name": "participantstatuslogs1", "alias": "log", "columns": ["participantId", "jobId", "availableBalance"]},
-	    {"name": "participants", "alias": "p", "columns": ["participantId", "age", "joviality"]},
-	    {"name": "jobs", "alias": "j", "columns": ["jobId", "employerId", "hourlyRate"]},
-	    {"name": "employers", "alias": "e", "columns": ["employerId", "buildingId", "location"]},
-	    {"name": "buildings", "alias": "b", "columns": ["buildingId", "buildingType", "location"]}
-	  ],
-	  "joins": [
-	    {"left": "log.participantId", "right": "p.participantId", "how": "inner"},
-	    {"left": "log.jobId", "right": "j.jobId", "how": "left"},
-	    {"left": "j.employerId", "right": "e.employerId", "how": "left"},
-	    {"left": "e.buildingId", "right": "b.buildingId", "how": "left"}
-	  ],
-	  "select": ["p.age", "p.joviality", "e.location", "b.buildingType"],
-	  "limit": 200,
-	  "format": "json"   # optional: json | html
-	}
-	"""
-	if not DB_PATH.exists():
-		return jsonify({"error": f"Database file not found: {DB_PATH}"}), 404
+    Request JSON:
+    {
+      "tables": [
+        {"name": "participantstatuslogs1", "alias": "log", "columns": ["participantId", "jobId", "availableBalance"]},
+        {"name": "participants", "alias": "p", "columns": ["participantId", "age", "joviality"]},
+        {"name": "jobs", "alias": "j", "columns": ["jobId", "employerId", "hourlyRate"]},
+        {"name": "employers", "alias": "e", "columns": ["employerId", "buildingId", "location"]},
+        {"name": "buildings", "alias": "b", "columns": ["buildingId", "buildingType", "location"]}
+      ],
+      "joins": [
+        {"left": "log.participantId", "right": "p.participantId", "how": "inner"},
+        {"left": "log.jobId", "right": "j.jobId", "how": "left"},
+        {"left": "j.employerId", "right": "e.employerId", "how": "left"},
+        {"left": "e.buildingId", "right": "b.buildingId", "how": "left"}
+      ],
+      "select": ["p.age", "p.joviality", "e.location", "b.buildingType"],
+      "limit": 200,
+      "format": "json"   # optional: json | html
+    }
+    """
+    if not DB_PATH.exists():
+        return jsonify({"error": f"Database file not found: {DB_PATH}"}), 404
 
-	payload = request.get_json(silent=True) or {}
-	tables = payload.get("tables", [])
-	joins = payload.get("joins", [])
-	select_cols = payload.get("select", [])
-	output_format = (payload.get("format") or "json").lower()
-	limit = payload.get("limit", 1000)
+    payload = request.get_json(silent=True) or {}
+    tables = payload.get("tables", [])
+    joins = payload.get("joins", [])
+    select_cols = payload.get("select", [])
+    output_format = (payload.get("format") or "json").lower()
+    limit = payload.get("limit", 1000)
 
-	if not isinstance(tables, list) or len(tables) < 2:
-		return jsonify({"error": "'tables' must contain at least two table specs."}), 400
-	if not isinstance(joins, list) or not joins:
-		return jsonify({"error": "'joins' must be a non-empty list."}), 400
-	if output_format not in {"json", "html"}:
-		return jsonify({"error": "'format' must be 'json' or 'html'."}), 400
+    if not isinstance(tables, list) or len(tables) < 2:
+        return jsonify(
+            {"error": "'tables' must contain at least two table specs."}
+        ), 400
+    if not isinstance(joins, list) or not joins:
+        return jsonify({"error": "'joins' must be a non-empty list."}), 400
+    if output_format not in {"json", "html"}:
+        return jsonify({"error": "'format' must be 'json' or 'html'."}), 400
 
-	try:
-		limit = int(limit)
-	except (TypeError, ValueError):
-		return jsonify({"error": "'limit' must be an integer."}), 400
-	if limit <= 0:
-		return jsonify({"error": "'limit' must be greater than 0."}), 400
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError):
+        return jsonify({"error": "'limit' must be an integer."}), 400
+    if limit <= 0:
+        return jsonify({"error": "'limit' must be greater than 0."}), 400
 
-	table_specs: dict[str, dict] = {}
-	for table_spec in tables:
-		if not isinstance(table_spec, dict):
-			return jsonify({"error": "Each table spec must be an object."}), 400
-		table_name = table_spec.get("name")
-		alias = table_spec.get("alias") or table_name
-		if not isinstance(table_name, str) or not _is_valid_identifier(table_name):
-			return jsonify({"error": f"Invalid table name: {table_name}"}), 400
-		if not isinstance(alias, str) or not _is_valid_identifier(alias):
-			return jsonify({"error": f"Invalid alias for table '{table_name}'."}), 400
-		if alias in table_specs:
-			return jsonify({"error": f"Duplicate table alias: {alias}"}), 400
-		columns = table_spec.get("columns", [])
-		if columns is not None and not isinstance(columns, list):
-			return jsonify({"error": f"'columns' must be a list for table '{table_name}'."}), 400
-		table_specs[alias] = {
-			"name": table_name,
-			"alias": alias,
-			"columns": list(columns or []),
-		}
+    table_specs: dict[str, dict] = {}
+    for table_spec in tables:
+        if not isinstance(table_spec, dict):
+            return jsonify({"error": "Each table spec must be an object."}), 400
+        table_name = table_spec.get("name")
+        alias = table_spec.get("alias") or table_name
+        if not isinstance(table_name, str) or not _is_valid_identifier(table_name):
+            return jsonify({"error": f"Invalid table name: {table_name}"}), 400
+        if not isinstance(alias, str) or not _is_valid_identifier(alias):
+            return jsonify({"error": f"Invalid alias for table '{table_name}'."}), 400
+        if alias in table_specs:
+            return jsonify({"error": f"Duplicate table alias: {alias}"}), 400
+        columns = table_spec.get("columns", [])
+        if columns is not None and not isinstance(columns, list):
+            return jsonify(
+                {"error": f"'columns' must be a list for table '{table_name}'."}
+            ), 400
+        table_specs[alias] = {
+            "name": table_name,
+            "alias": alias,
+            "columns": list(columns or []),
+        }
 
-	# Validate joins and collect required columns per table alias.
-	required_columns: dict[str, set[str]] = {alias: set(spec["columns"]) for alias, spec in table_specs.items()}
-	validated_joins: list[dict] = []
-	allowed_join_types = {"inner", "left", "right", "outer"}
+    # Validate joins and collect required columns per table alias.
+    required_columns: dict[str, set[str]] = {
+        alias: set(spec["columns"]) for alias, spec in table_specs.items()
+    }
+    validated_joins: list[dict] = []
+    allowed_join_types = {"inner", "left", "right", "outer"}
 
-	for join_spec in joins:
-		if not isinstance(join_spec, dict):
-			return jsonify({"error": "Each join spec must be an object."}), 400
-		left_ref = _parse_table_ref(join_spec.get("left", ""))
-		right_ref = _parse_table_ref(join_spec.get("right", ""))
-		if left_ref is None or right_ref is None:
-			return jsonify({"error": "Join refs must use 'alias.column' syntax."}), 400
-		left_alias, left_col = left_ref
-		right_alias, right_col = right_ref
-		if left_alias not in table_specs or right_alias not in table_specs:
-			return jsonify({"error": f"Unknown table alias in join: {left_alias} -> {right_alias}"}), 400
-		how = (join_spec.get("how") or "inner").lower()
-		if how not in allowed_join_types:
-			return jsonify({"error": f"Unsupported join type: {how}"}), 400
-		required_columns[left_alias].add(left_col)
-		required_columns[right_alias].add(right_col)
-		validated_joins.append({"left": left_ref, "right": right_ref, "how": how})
+    for join_spec in joins:
+        if not isinstance(join_spec, dict):
+            return jsonify({"error": "Each join spec must be an object."}), 400
+        left_ref = _parse_table_ref(join_spec.get("left", ""))
+        right_ref = _parse_table_ref(join_spec.get("right", ""))
+        if left_ref is None or right_ref is None:
+            return jsonify({"error": "Join refs must use 'alias.column' syntax."}), 400
+        left_alias, left_col = left_ref
+        right_alias, right_col = right_ref
+        if left_alias not in table_specs or right_alias not in table_specs:
+            return jsonify(
+                {"error": f"Unknown table alias in join: {left_alias} -> {right_alias}"}
+            ), 400
+        how = (join_spec.get("how") or "inner").lower()
+        if how not in allowed_join_types:
+            return jsonify({"error": f"Unsupported join type: {how}"}), 400
+        required_columns[left_alias].add(left_col)
+        required_columns[right_alias].add(right_col)
+        validated_joins.append({"left": left_ref, "right": right_ref, "how": how})
 
-	conn = _get_db_connection()
-	try:
-		loaded: dict[str, pd.DataFrame] = {}
-		load_limit = max(int(limit), min(int(limit) * 10, 5000))
-		for alias, spec in table_specs.items():
-			if not _table_exists(conn, spec["name"]):
-				return jsonify({"error": f"Table '{spec['name']}' does not exist."}), 404
-			df, _ = _load_prefixed_table(
-				conn,
-				spec["name"],
-				alias,
-				list(required_columns[alias]),
-				row_limit=load_limit,
-			)
-			if df.empty:
-				return jsonify({"error": f"Table '{spec['name']}' returned no rows."}), 404
-			loaded[alias] = df
-	finally:
-		conn.close()
+    conn = _get_db_connection()
+    try:
+        loaded: dict[str, pd.DataFrame] = {}
+        load_limit = max(int(limit), min(int(limit) * 10, 5000))
+        for alias, spec in table_specs.items():
+            if not _table_exists(conn, spec["name"]):
+                return jsonify(
+                    {"error": f"Table '{spec['name']}' does not exist."}
+                ), 404
+            df, _ = _load_prefixed_table(
+                conn,
+                spec["name"],
+                alias,
+                list(required_columns[alias]),
+                row_limit=load_limit,
+            )
+            if df.empty:
+                return jsonify(
+                    {"error": f"Table '{spec['name']}' returned no rows."}
+                ), 404
+            loaded[alias] = df
+    finally:
+        conn.close()
 
-	# Join in the requested order; the first table becomes the base frame.
-	base_alias = next(iter(table_specs.keys()))
-	joined = loaded[base_alias].copy()
-	joined_aliases = {base_alias}
+    # Join in the requested order; the first table becomes the base frame.
+    base_alias = next(iter(table_specs.keys()))
+    joined = loaded[base_alias].copy()
+    joined_aliases = {base_alias}
 
-	def _prefixed_key(df: pd.DataFrame, alias: str, requested_col: str) -> str | None:
-		available = {c.split("__", 1)[1] for c in df.columns if c.startswith(f"{alias}__")}
-		actual_col = _resolve_column_name(available, requested_col)
-		if actual_col is None:
-			return None
-		return f"{alias}__{actual_col}"
+    def _prefixed_key(df: pd.DataFrame, alias: str, requested_col: str) -> str | None:
+        available = {
+            c.split("__", 1)[1] for c in df.columns if c.startswith(f"{alias}__")
+        }
+        actual_col = _resolve_column_name(available, requested_col)
+        if actual_col is None:
+            return None
+        return f"{alias}__{actual_col}"
 
-	for join_spec in validated_joins:
-		(left_alias, left_col) = join_spec["left"]
-		(right_alias, right_col) = join_spec["right"]
-		if left_alias not in joined_aliases:
-			return jsonify({"error": f"Join order problem: '{left_alias}' is not present in the current joined data."}), 400
-		right_df = loaded[right_alias]
-		left_key = _prefixed_key(joined, left_alias, left_col)
-		right_key = _prefixed_key(right_df, right_alias, right_col)
-		if left_key is None:
-			return jsonify({"error": f"Missing join key in current result: {join_spec['left'][0]}.{left_col}"}), 400
-		if right_key is None:
-			return jsonify({"error": f"Missing join key in table '{right_alias}': {join_spec['right'][0]}.{right_col}"}), 400
-		if left_key not in joined.columns:
-			return jsonify({"error": f"Missing join key in current result: {join_spec['left'][0]}.{left_col}"}), 400
-		if right_key not in right_df.columns:
-			return jsonify({"error": f"Missing join key in table '{right_alias}': {join_spec['right'][0]}.{right_col}"}), 400
-		joined = pd.merge(joined, right_df, left_on=left_key, right_on=right_key, how=join_spec["how"])
-		joined_aliases.add(right_alias)
+    for join_spec in validated_joins:
+        (left_alias, left_col) = join_spec["left"]
+        (right_alias, right_col) = join_spec["right"]
+        if left_alias not in joined_aliases:
+            return jsonify(
+                {
+                    "error": f"Join order problem: '{left_alias}' is not present in the current joined data."
+                }
+            ), 400
+        right_df = loaded[right_alias]
+        left_key = _prefixed_key(joined, left_alias, left_col)
+        right_key = _prefixed_key(right_df, right_alias, right_col)
+        if left_key is None:
+            return jsonify(
+                {
+                    "error": f"Missing join key in current result: {join_spec['left'][0]}.{left_col}"
+                }
+            ), 400
+        if right_key is None:
+            return jsonify(
+                {
+                    "error": f"Missing join key in table '{right_alias}': {join_spec['right'][0]}.{right_col}"
+                }
+            ), 400
+        if left_key not in joined.columns:
+            return jsonify(
+                {
+                    "error": f"Missing join key in current result: {join_spec['left'][0]}.{left_col}"
+                }
+            ), 400
+        if right_key not in right_df.columns:
+            return jsonify(
+                {
+                    "error": f"Missing join key in table '{right_alias}': {join_spec['right'][0]}.{right_col}"
+                }
+            ), 400
+        joined = pd.merge(
+            joined, right_df, left_on=left_key, right_on=right_key, how=join_spec["how"]
+        )
+        joined_aliases.add(right_alias)
 
-	if select_cols:
-		if not isinstance(select_cols, list):
-			return jsonify({"error": "'select' must be a list when provided."}), 400
-		resolved_select = []
-		for item in select_cols:
-			ref = _parse_table_ref(item)
-			if ref is None:
-				return jsonify({"error": f"Select columns must use 'alias.column' syntax: {item}"}), 400
-			alias, col = ref
-			if alias not in table_specs:
-				return jsonify({"error": f"Unknown alias in select: {alias}"}), 400
-			actual_col = _resolve_column_name(
-				{c.split("__", 1)[1] for c in joined.columns if c.startswith(f"{alias}__")},
-				col,
-			)
-			if actual_col is None:
-				return jsonify({"error": f"Column not available in joined result: {item}"}), 400
-			resolved_select.append(f"{alias}__{actual_col}")
-		joined = joined[resolved_select]
+    if select_cols:
+        if not isinstance(select_cols, list):
+            return jsonify({"error": "'select' must be a list when provided."}), 400
+        resolved_select = []
+        for item in select_cols:
+            ref = _parse_table_ref(item)
+            if ref is None:
+                return jsonify(
+                    {"error": f"Select columns must use 'alias.column' syntax: {item}"}
+                ), 400
+            alias, col = ref
+            if alias not in table_specs:
+                return jsonify({"error": f"Unknown alias in select: {alias}"}), 400
+            actual_col = _resolve_column_name(
+                {
+                    c.split("__", 1)[1]
+                    for c in joined.columns
+                    if c.startswith(f"{alias}__")
+                },
+                col,
+            )
+            if actual_col is None:
+                return jsonify(
+                    {"error": f"Column not available in joined result: {item}"}
+                ), 400
+            resolved_select.append(f"{alias}__{actual_col}")
+        joined = joined[resolved_select]
 
-	joined = joined.head(limit)
-	if joined.empty:
-		return jsonify({"error": "No rows after joining."}), 404
+    joined = joined.head(limit)
+    if joined.empty:
+        return jsonify({"error": "No rows after joining."}), 404
 
-	if output_format == "html":
-		title = "Multi-table join result"
-		html = f"""<!doctype html>
+    if output_format == "html":
+        title = "Multi-table join result"
+        html = f"""<!doctype html>
 <html>
 <head>
 	<meta charset=\"utf-8\">
@@ -1414,393 +1575,422 @@ def join_tables():
 	{joined.to_html(index=False, escape=True)}
 </body>
 </html>"""
-		return html, 200, {"Content-Type": "text/html; charset=utf-8"}
+        return html, 200, {"Content-Type": "text/html; charset=utf-8"}
 
-	return jsonify(
-		{
-			"row_count": int(len(joined)),
-			"column_count": int(len(joined.columns)),
-			"columns": list(joined.columns),
-			"rows": joined.to_dict(orient="records"),
-			"tables": list(table_specs.keys()),
-			"joins": [
-				{
-					"left": f"{left_alias}.{left_col}",
-					"right": f"{right_alias}.{right_col}",
-					"how": join_spec["how"],
-				}
-				for join_spec in validated_joins
-				for (left_alias, left_col), (right_alias, right_col) in [(join_spec["left"], join_spec["right"])]
-			],
-		}
-	)
+    return jsonify(
+        {
+            "row_count": int(len(joined)),
+            "column_count": int(len(joined.columns)),
+            "columns": list(joined.columns),
+            "rows": joined.to_dict(orient="records"),
+            "tables": list(table_specs.keys()),
+            "joins": [
+                {
+                    "left": f"{left_alias}.{left_col}",
+                    "right": f"{right_alias}.{right_col}",
+                    "how": join_spec["how"],
+                }
+                for join_spec in validated_joins
+                for (left_alias, left_col), (right_alias, right_col) in [
+                    (join_spec["left"], join_spec["right"])
+                ]
+            ],
+        }
+    )
 
 
 @app.route("/api/join-chart", methods=["POST"])
 def join_chart():
-	"""Join multiple tables and render a D3Blocks chart from the joined result."""
-	payload = request.get_json(silent=True) or {}
-	chart = (payload.get("chart") or "scatter").lower()
-	chart_columns = payload.get("chart_columns", payload.get("columns", []))
-	if not isinstance(chart_columns, list):
-		return jsonify({"error": "'chart_columns' must be a list when provided."}), 400
+    """Join multiple tables and render a D3Blocks chart from the joined result."""
+    payload = request.get_json(silent=True) or {}
+    chart = (payload.get("chart") or "scatter").lower()
+    chart_columns = payload.get("chart_columns", payload.get("columns", []))
+    if not isinstance(chart_columns, list):
+        return jsonify({"error": "'chart_columns' must be a list when provided."}), 400
 
-	try:
-		joined, table_specs, validated_joins = _build_joined_dataframe(payload)
-		title = payload.get("title") or f"Joined {chart} chart"
-		html = _render_joined_chart_html(joined, chart, chart_columns, title)
-		return html, 200, {"Content-Type": "text/html; charset=utf-8"}
-	except JoinRequestError as exc:
-		return jsonify({"error": exc.message}), exc.status_code
-	except Exception as exc:
-		return jsonify({"error": f"Failed to build join chart: {exc}"}), 500
+    try:
+        joined, table_specs, validated_joins = _build_joined_dataframe(payload)
+        title = payload.get("title") or f"Joined {chart} chart"
+        html = _render_joined_chart_html(joined, chart, chart_columns, title)
+        return html, 200, {"Content-Type": "text/html; charset=utf-8"}
+    except JoinRequestError as exc:
+        return jsonify({"error": exc.message}), exc.status_code
+    except Exception as exc:
+        return jsonify({"error": f"Failed to build join chart: {exc}"}), 500
 
 
 @app.route("/api/join-sync", methods=["POST"])
 def join_sync():
-	"""Join multiple tables and render multiple synced scatter charts."""
-	payload = request.get_json(silent=True) or {}
-	views = payload.get("views", [])
-	if not isinstance(views, list) or not views:
-		return jsonify({"error": "'views' must be a non-empty list."}), 400
+    """Join multiple tables and render multiple synced scatter charts."""
+    payload = request.get_json(silent=True) or {}
+    views = payload.get("views", [])
+    if not isinstance(views, list) or not views:
+        return jsonify({"error": "'views' must be a non-empty list."}), 400
 
-	try:
-		joined, _table_specs, _validated_joins = _build_joined_dataframe(payload)
-		title = payload.get("title") or "Synced multi-view join"
-		html = _render_synced_joined_views_html(joined, views, title)
-		return html, 200, {"Content-Type": "text/html; charset=utf-8"}
-	except JoinRequestError as exc:
-		return jsonify({"error": exc.message}), exc.status_code
-	except Exception as exc:
-		return jsonify({"error": f"Failed to build synced join view: {exc}"}), 500
+    try:
+        joined, _table_specs, _validated_joins = _build_joined_dataframe(payload)
+        title = payload.get("title") or "Synced multi-view join"
+        html = _render_synced_joined_views_html(joined, views, title)
+        return html, 200, {"Content-Type": "text/html; charset=utf-8"}
+    except JoinRequestError as exc:
+        return jsonify({"error": exc.message}), exc.status_code
+    except Exception as exc:
+        return jsonify({"error": f"Failed to build synced join view: {exc}"}), 500
 
 
 @app.route("/api/datasets", methods=["GET"])
 def list_datasets():
-	"""List all available tables from vast_challenge.db."""
-	if not DB_PATH.exists():
-		return jsonify({"error": f"Database file not found: {DB_PATH}"}), 404
+    """List all available tables from vast_challenge.db."""
+    if not DB_PATH.exists():
+        return jsonify({"error": f"Database file not found: {DB_PATH}"}), 404
 
-	conn = _get_db_connection()
-	try:
-		rows = conn.execute(
-			"SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
-		).fetchall()
-		return jsonify({"datasets": [row[0] for row in rows]})
-	finally:
-		conn.close()
+    conn = _get_db_connection()
+    try:
+        rows = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+        ).fetchall()
+        return jsonify({"datasets": [row[0] for row in rows]})
+    finally:
+        conn.close()
 
 
 @app.route("/api/d3block", methods=["POST"])
 def generate_d3block_html():
-	"""
-	Generate a D3Blocks chart from SQLite data and return the HTML.
+    """
+    Generate a D3Blocks chart from SQLite data and return the HTML.
 
-	Request JSON:
-	{
-	  "dataset": "participants",
-	  "columns": ["participantId", "age"],
-			"chart": "scatter",  # optional: scatter | heatmap
-	  "limit": 5000          # optional
-	}
-	"""
-	if not DB_PATH.exists():
-		return jsonify({"error": f"Database file not found: {DB_PATH}"}), 404
+    Request JSON:
+    {
+      "dataset": "participants",
+      "columns": ["participantId", "age"],
+                    "chart": "scatter",  # optional: scatter | heatmap
+      "limit": 5000          # optional
+    }
+    """
+    if not DB_PATH.exists():
+        return jsonify({"error": f"Database file not found: {DB_PATH}"}), 404
 
-	payload = request.get_json(silent=True) or {}
-	dataset = payload.get("dataset")
-	columns = payload.get("columns", [])
-	chart = (payload.get("chart") or "scatter").lower()
-	limit = payload.get("limit", 5000)
+    payload = request.get_json(silent=True) or {}
+    dataset = payload.get("dataset")
+    columns = payload.get("columns", [])
+    chart = (payload.get("chart") or "scatter").lower()
+    limit = payload.get("limit", 5000)
 
-	if not isinstance(dataset, str) or not _is_valid_identifier(dataset):
-		return jsonify({"error": "Invalid dataset name."}), 400
+    if not isinstance(dataset, str) or not _is_valid_identifier(dataset):
+        return jsonify({"error": "Invalid dataset name."}), 400
 
-	if not isinstance(columns, list) or not columns:
-		return jsonify({"error": "'columns' must be a non-empty list."}), 400
+    if not isinstance(columns, list) or not columns:
+        return jsonify({"error": "'columns' must be a non-empty list."}), 400
 
-	if any(not isinstance(col, str) or not _is_valid_identifier(col) for col in columns):
-		return jsonify({"error": "One or more column names are invalid."}), 400
+    if any(
+        not isinstance(col, str) or not _is_valid_identifier(col) for col in columns
+    ):
+        return jsonify({"error": "One or more column names are invalid."}), 400
 
-	if chart not in {"scatter", "heatmap"}:
-		return jsonify({"error": "Unsupported chart type."}), 400
+    if chart not in {"scatter", "heatmap"}:
+        return jsonify({"error": "Unsupported chart type."}), 400
 
-	try:
-		limit = int(limit)
-	except (TypeError, ValueError):
-		return jsonify({"error": "'limit' must be an integer."}), 400
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError):
+        return jsonify({"error": "'limit' must be an integer."}), 400
 
-	if limit <= 0:
-		return jsonify({"error": "'limit' must be greater than 0."}), 400
+    if limit <= 0:
+        return jsonify({"error": "'limit' must be greater than 0."}), 400
 
-	conn = _get_db_connection()
-	try:
-		if not _table_exists(conn, dataset):
-			return jsonify({"error": f"Dataset '{dataset}' does not exist."}), 404
+    conn = _get_db_connection()
+    try:
+        if not _table_exists(conn, dataset):
+            return jsonify({"error": f"Dataset '{dataset}' does not exist."}), 404
 
-		available_columns = _get_table_columns(conn, dataset)
-		missing = [col for col in columns if col not in available_columns]
-		if missing:
-			return jsonify({"error": f"Columns not found in '{dataset}': {missing}"}), 400
+        available_columns = _get_table_columns(conn, dataset)
+        missing = [col for col in columns if col not in available_columns]
+        if missing:
+            return jsonify(
+                {"error": f"Columns not found in '{dataset}': {missing}"}
+            ), 400
 
-		selected_columns = ", ".join(columns)
-		query = f"SELECT {selected_columns} FROM {dataset} LIMIT ?"
-		df = pd.read_sql_query(query, conn, params=(limit,))
-	finally:
-		conn.close()
+        selected_columns = ", ".join(columns)
+        query = f"SELECT {selected_columns} FROM {dataset} LIMIT ?"
+        df = pd.read_sql_query(query, conn, params=(limit,))
+    finally:
+        conn.close()
 
-	if df.empty:
-		return jsonify({"error": "No rows returned for this request."}), 404
+    if df.empty:
+        return jsonify({"error": "No rows returned for this request."}), 404
 
-	d3 = D3Blocks()
+    d3 = D3Blocks()
 
-	try:
-		html = ""
-		if chart == "scatter":
-			if len(columns) < 2:
-				return jsonify({"error": "Scatter chart requires at least 2 columns."}), 400
+    try:
+        html = ""
+        if chart == "scatter":
+            if len(columns) < 2:
+                return jsonify(
+                    {"error": "Scatter chart requires at least 2 columns."}
+                ), 400
 
-			# d3blocks.scatter expects x and y arrays of equal length.
-			scatter_df = df[[columns[0], columns[1]]].copy()
-			scatter_df[columns[0]] = pd.to_numeric(scatter_df[columns[0]], errors="coerce")
-			scatter_df[columns[1]] = pd.to_numeric(scatter_df[columns[1]], errors="coerce")
-			scatter_df = scatter_df.dropna(subset=[columns[0], columns[1]])
+            # d3blocks.scatter expects x and y arrays of equal length.
+            scatter_df = df[[columns[0], columns[1]]].copy()
+            scatter_df[columns[0]] = pd.to_numeric(
+                scatter_df[columns[0]], errors="coerce"
+            )
+            scatter_df[columns[1]] = pd.to_numeric(
+                scatter_df[columns[1]], errors="coerce"
+            )
+            scatter_df = scatter_df.dropna(subset=[columns[0], columns[1]])
 
-			if scatter_df.shape[0] < 2:
-				return jsonify({"error": "Not enough data points for scatter chart."}), 400
+            if scatter_df.shape[0] < 2:
+                return jsonify(
+                    {"error": "Not enough data points for scatter chart."}
+                ), 400
 
-			html = d3.scatter(
-				scatter_df[columns[0]].to_numpy(),
-				scatter_df[columns[1]].to_numpy(),
-				showfig=False,
-				return_html=True,
-				title=f"Scatter: {dataset} ({columns[0]} vs {columns[1]})",
-			)
+            html = d3.scatter(
+                scatter_df[columns[0]].to_numpy(),
+                scatter_df[columns[1]].to_numpy(),
+                showfig=False,
+                return_html=True,
+                title=f"Scatter: {dataset} ({columns[0]} vs {columns[1]})",
+            )
 
-		elif chart == "heatmap":
-			if len(columns) < 2:
-				return jsonify({"error": "Heatmap requires at least 2 columns."}), 400
-			pivot = (
-				df.groupby([columns[0], columns[1]])
-				.size()
-				.reset_index(name="count")
-				.pivot(index=columns[0], columns=columns[1], values="count")
-				.fillna(0)
-			)
-			html = d3.heatmap(
-				pivot,
-				color=None,
-				showfig=False,
-				return_html=True,
-				title=f"Heatmap: {dataset} ({columns[0]} x {columns[1]})",
-			)
+        elif chart == "heatmap":
+            if len(columns) < 2:
+                return jsonify({"error": "Heatmap requires at least 2 columns."}), 400
+            pivot = (
+                df.groupby([columns[0], columns[1]])
+                .size()
+                .reset_index(name="count")
+                .pivot(index=columns[0], columns=columns[1], values="count")
+                .fillna(0)
+            )
+            html = d3.heatmap(
+                pivot,
+                color=None,
+                showfig=False,
+                return_html=True,
+                title=f"Heatmap: {dataset} ({columns[0]} x {columns[1]})",
+            )
 
-		return html, 200, {"Content-Type": "text/html; charset=utf-8"}
+        return html, 200, {"Content-Type": "text/html; charset=utf-8"}
 
-	except Exception as exc:
-		return jsonify({"error": f"Failed to build D3Blocks chart: {exc}"}), 500
+    except Exception as exc:
+        return jsonify({"error": f"Failed to build D3Blocks chart: {exc}"}), 500
 
 
 @app.route("/api/d3block-sankey", methods=["POST"])
 def generate_sankey_html():
-	"""
-	Generate an interactive Sankey diagram from SQLite data.
-	
-	Request JSON:
-	{
-	  "dataset": "participants",
-	  "source_col": "participantId",
-	  "target_col": "employerId",
-	  "value_col": "duration",        # required for Sankey; must be numeric
-	  "limit": 1000                   # optional
-	}
-	"""
-	if not DB_PATH.exists():
-		return jsonify({"error": f"Database file not found: {DB_PATH}"}), 404
+    """
+    Generate an interactive Sankey diagram from SQLite data.
 
-	payload = request.get_json(silent=True) or {}
-	dataset = payload.get("dataset")
-	source_col = payload.get("source_col")
-	target_col = payload.get("target_col")
-	value_col = payload.get("value_col")
-	limit = payload.get("limit", 1000)
+    Request JSON:
+    {
+      "dataset": "participants",
+      "source_col": "participantId",
+      "target_col": "employerId",
+      "value_col": "duration",        # required for Sankey; must be numeric
+      "limit": 1000                   # optional
+    }
+    """
+    if not DB_PATH.exists():
+        return jsonify({"error": f"Database file not found: {DB_PATH}"}), 404
 
-	if not isinstance(dataset, str) or not _is_valid_identifier(dataset):
-		return jsonify({"error": "Invalid dataset name."}), 400
+    payload = request.get_json(silent=True) or {}
+    dataset = payload.get("dataset")
+    source_col = payload.get("source_col")
+    target_col = payload.get("target_col")
+    value_col = payload.get("value_col")
+    limit = payload.get("limit", 1000)
 
-	if not source_col or not _is_valid_identifier(source_col):
-		return jsonify({"error": "Invalid source_col."}), 400
+    if not isinstance(dataset, str) or not _is_valid_identifier(dataset):
+        return jsonify({"error": "Invalid dataset name."}), 400
 
-	if not target_col or not _is_valid_identifier(target_col):
-		return jsonify({"error": "Invalid target_col."}), 400
+    if not source_col or not _is_valid_identifier(source_col):
+        return jsonify({"error": "Invalid source_col."}), 400
 
-	if not value_col or not _is_valid_identifier(value_col):
-		return jsonify({"error": "value_col is required for Sankey."}), 400
+    if not target_col or not _is_valid_identifier(target_col):
+        return jsonify({"error": "Invalid target_col."}), 400
 
-	try:
-		limit = int(limit)
-	except (TypeError, ValueError):
-		return jsonify({"error": "'limit' must be an integer."}), 400
+    if not value_col or not _is_valid_identifier(value_col):
+        return jsonify({"error": "value_col is required for Sankey."}), 400
 
-	if limit <= 0:
-		return jsonify({"error": "'limit' must be greater than 0."}), 400
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError):
+        return jsonify({"error": "'limit' must be an integer."}), 400
 
-	conn = _get_db_connection()
-	try:
-		if not _table_exists(conn, dataset):
-			return jsonify({"error": f"Dataset '{dataset}' does not exist."}), 404
+    if limit <= 0:
+        return jsonify({"error": "'limit' must be greater than 0."}), 400
 
-		available_columns = _get_table_columns(conn, dataset)
-		missing = [c for c in [source_col, target_col, value_col] if c not in available_columns]
-		if missing:
-			return jsonify({"error": f"Columns not found: {missing}"}), 400
+    conn = _get_db_connection()
+    try:
+        if not _table_exists(conn, dataset):
+            return jsonify({"error": f"Dataset '{dataset}' does not exist."}), 404
 
-		cols_to_select = ", ".join([source_col, target_col, value_col])
-		query = f"SELECT {cols_to_select} FROM {dataset} LIMIT ?"
-		df = pd.read_sql_query(query, conn, params=(limit,))
-	finally:
-		conn.close()
+        available_columns = _get_table_columns(conn, dataset)
+        missing = [
+            c for c in [source_col, target_col, value_col] if c not in available_columns
+        ]
+        if missing:
+            return jsonify({"error": f"Columns not found: {missing}"}), 400
 
-	if df.empty:
-		return jsonify({"error": "No rows returned for this request."}), 404
+        cols_to_select = ", ".join([source_col, target_col, value_col])
+        query = f"SELECT {cols_to_select} FROM {dataset} LIMIT ?"
+        df = pd.read_sql_query(query, conn, params=(limit,))
+    finally:
+        conn.close()
 
-	# Prepare for Sankey: requires 3-column DataFrame with source, target, value
-	df_sankey = df[[source_col, target_col, value_col]].copy()
-	df_sankey[value_col] = pd.to_numeric(df_sankey[value_col], errors="coerce")
-	df_sankey = df_sankey.dropna(subset=[value_col])
+    if df.empty:
+        return jsonify({"error": "No rows returned for this request."}), 404
 
-	if df_sankey.empty:
-		return jsonify({"error": "No valid numeric values in value_col for Sankey."}), 400
+    # Prepare for Sankey: requires 3-column DataFrame with source, target, value
+    df_sankey = df[[source_col, target_col, value_col]].copy()
+    df_sankey[value_col] = pd.to_numeric(df_sankey[value_col], errors="coerce")
+    df_sankey = df_sankey.dropna(subset=[value_col])
 
-	# Sankey expects a DataFrame where the first two columns are source/target
-	# and the third column is the value. Rename columns to match D3Blocks expectation.
-	df_sankey.columns = ["source", "target", "value"]
+    if df_sankey.empty:
+        return jsonify(
+            {"error": "No valid numeric values in value_col for Sankey."}
+        ), 400
 
-	d3 = D3Blocks()
-	try:
-		html = d3.sankey(
-			df=df_sankey,
-			showfig=False,
-			return_html=True,
-			title=f"Sankey: {dataset} ({source_col} → {target_col})",
-		)
+    # Sankey expects a DataFrame where the first two columns are source/target
+    # and the third column is the value. Rename columns to match D3Blocks expectation.
+    df_sankey.columns = ["source", "target", "value"]
 
-		return html, 200, {"Content-Type": "text/html; charset=utf-8"}
+    d3 = D3Blocks()
+    try:
+        html = d3.sankey(
+            df=df_sankey,
+            showfig=False,
+            return_html=True,
+            title=f"Sankey: {dataset} ({source_col} → {target_col})",
+        )
 
-	except Exception as exc:
-		return jsonify({"error": f"Failed to build Sankey: {exc}"}), 500
+        return html, 200, {"Content-Type": "text/html; charset=utf-8"}
+
+    except Exception as exc:
+        return jsonify({"error": f"Failed to build Sankey: {exc}"}), 500
 
 
 def _parse_wkt_point(wkt: str) -> tuple[float, float] | tuple[None, None]:
-	m = re.search(r"POINT\s*\(\s*([\d.eE+\-]+)\s+([\d.eE+\-]+)\s*\)", str(wkt), re.IGNORECASE)
-	return (float(m.group(1)), float(m.group(2))) if m else (None, None)
+    m = re.search(
+        r"POINT\s*\(\s*([\d.eE+\-]+)\s+([\d.eE+\-]+)\s*\)", str(wkt), re.IGNORECASE
+    )
+    return (float(m.group(1)), float(m.group(2))) if m else (None, None)
 
 
 def _get_job_transitions(conn: sqlite3.Connection) -> tuple[pd.DataFrame, pd.DataFrame]:
-	"""Return (start_employers, end_employers) DataFrames with participantId → employerId.
+    """Return (start_employers, end_employers) DataFrames with participantId → employerId.
 
-	Uses the numerically-first and numerically-last participantstatuslogs table
-	as proxies for the start and end of the study period.
-	"""
-	rows = conn.execute(
-		"SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'participantstatuslogs%'"
-	).fetchall()
-	tables = sorted([r[0] for r in rows], key=lambda x: int(re.search(r"(\d+)$", x).group(1)))
-	if len(tables) < 2:
-		return pd.DataFrame(), pd.DataFrame()
+    Uses the numerically-first and numerically-last participantstatuslogs table
+    as proxies for the start and end of the study period.
+    """
+    rows = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'participantstatuslogs%'"
+    ).fetchall()
+    tables = sorted(
+        [r[0] for r in rows], key=lambda x: int(re.search(r"(\d+)$", x).group(1))
+    )
+    if len(tables) < 2:
+        return pd.DataFrame(), pd.DataFrame()
 
-	jobs_df = pd.read_sql_query("SELECT jobId, employerId FROM jobs", conn)
+    jobs_df = pd.read_sql_query("SELECT jobId, employerId FROM jobs", conn)
 
-	def dominant_employer(table: str) -> pd.DataFrame:
-		df = pd.read_sql_query(
-			f"""
+    def dominant_employer(table: str) -> pd.DataFrame:
+        df = pd.read_sql_query(
+            f"""
 			SELECT participantId, jobId, COUNT(*) AS cnt
 			FROM {_quote_identifier(table)}
 			WHERE jobId IS NOT NULL
 			  AND TRIM(CAST(jobId AS TEXT)) NOT IN ('', 'N/A', 'nan')
 			GROUP BY participantId, jobId
 			""",
-			conn,
-		)
-		if df.empty:
-			return pd.DataFrame(columns=["participantId", "employerId"])
-		top = (
-			df.sort_values("cnt", ascending=False)
-			.groupby("participantId")
-			.first()
-			.reset_index()[["participantId", "jobId"]]
-		)
-		top["jobId"] = pd.to_numeric(top["jobId"], errors="coerce")
-		return top.merge(jobs_df, on="jobId", how="left")[["participantId", "employerId"]].dropna()
+            conn,
+        )
+        if df.empty:
+            return pd.DataFrame(columns=["participantId", "employerId"])
+        top = (
+            df.sort_values("cnt", ascending=False)
+            .groupby("participantId")
+            .first()
+            .reset_index()[["participantId", "jobId"]]
+        )
+        top["jobId"] = pd.to_numeric(top["jobId"], errors="coerce")
+        return top.merge(jobs_df, on="jobId", how="left")[
+            ["participantId", "employerId"]
+        ].dropna()
 
-	return dominant_employer(tables[0]), dominant_employer(tables[-1])
+    return dominant_employer(tables[0]), dominant_employer(tables[-1])
 
 
 def _compute_employer_health_scores(conn: sqlite3.Connection) -> pd.DataFrame:
-	"""Estimated health score per employer (derived — not an official measure).
+    """Estimated health score per employer (derived — not an official measure).
 
-	Score = normalized(job_count)*0.25 + normalized(avg_rate)*0.25
-	      + normalized(stable)*0.25 - normalized(turnover_rate)*0.25
-	All components normalised 0–1 within the current dataset.
-	"""
-	job_df = pd.read_sql_query(
-		"SELECT employerId, COUNT(*) AS job_count, AVG(hourlyRate) AS avg_rate FROM jobs GROUP BY employerId",
-		conn,
-	)
-	start_df, end_df = _get_job_transitions(conn)
-	if start_df.empty or end_df.empty:
-		return pd.DataFrame()
+    Score = normalized(job_count)*0.25 + normalized(avg_rate)*0.25
+          + normalized(stable)*0.25 - normalized(turnover_rate)*0.25
+    All components normalised 0–1 within the current dataset.
+    """
+    job_df = pd.read_sql_query(
+        "SELECT employerId, COUNT(*) AS job_count, AVG(hourlyRate) AS avg_rate FROM jobs GROUP BY employerId",
+        conn,
+    )
+    start_df, end_df = _get_job_transitions(conn)
+    if start_df.empty or end_df.empty:
+        return pd.DataFrame()
 
-	all_employers = set(start_df["employerId"].dropna().astype(int)) | set(end_df["employerId"].dropna().astype(int))
-	rows = []
-	for emp in all_employers:
-		sp = set(start_df[start_df["employerId"] == emp]["participantId"])
-		ep = set(end_df[end_df["employerId"] == emp]["participantId"])
-		stable = len(sp & ep)
-		departed = len(sp - ep)
-		arrived  = len(ep - sp)
-		total_start = max(len(sp), 1)
-		rows.append({
-			"employerId":    emp,
-			"stable":        stable,
-			"departed":      departed,
-			"arrived":       arrived,
-			"total_start":   total_start,
-			"turnover_rate": round((departed + arrived) / total_start, 3),
-		})
-	trans_df = pd.DataFrame(rows)
+    all_employers = set(start_df["employerId"].dropna().astype(int)) | set(
+        end_df["employerId"].dropna().astype(int)
+    )
+    rows = []
+    for emp in all_employers:
+        sp = set(start_df[start_df["employerId"] == emp]["participantId"])
+        ep = set(end_df[end_df["employerId"] == emp]["participantId"])
+        stable = len(sp & ep)
+        departed = len(sp - ep)
+        arrived = len(ep - sp)
+        total_start = max(len(sp), 1)
+        rows.append(
+            {
+                "employerId": emp,
+                "stable": stable,
+                "departed": departed,
+                "arrived": arrived,
+                "total_start": total_start,
+                "turnover_rate": round((departed + arrived) / total_start, 3),
+            }
+        )
+    trans_df = pd.DataFrame(rows)
 
-	job_df["employerId"]   = pd.to_numeric(job_df["employerId"],   errors="coerce")
-	trans_df["employerId"] = pd.to_numeric(trans_df["employerId"], errors="coerce")
-	df = job_df.merge(trans_df, on="employerId", how="inner")
-	if df.empty:
-		return df
+    job_df["employerId"] = pd.to_numeric(job_df["employerId"], errors="coerce")
+    trans_df["employerId"] = pd.to_numeric(trans_df["employerId"], errors="coerce")
+    df = job_df.merge(trans_df, on="employerId", how="inner")
+    if df.empty:
+        return df
 
-	def _norm(col: str) -> pd.Series:
-		mn, mx = df[col].min(), df[col].max()
-		if mx == mn:
-			return pd.Series([0.5] * len(df), index=df.index)
-		return (df[col] - mn) / (mx - mn)
+    def _norm(col: str) -> pd.Series:
+        mn, mx = df[col].min(), df[col].max()
+        if mx == mn:
+            return pd.Series([0.5] * len(df), index=df.index)
+        return (df[col] - mn) / (mx - mn)
 
-	df["health_score"] = (
-		_norm("job_count")    * 0.25
-		+ _norm("avg_rate")   * 0.25
-		+ _norm("stable")     * 0.25
-		- _norm("turnover_rate") * 0.25
-	).round(3)
-	return df
+    df["health_score"] = (
+        _norm("job_count") * 0.25
+        + _norm("avg_rate") * 0.25
+        + _norm("stable") * 0.25
+        - _norm("turnover_rate") * 0.25
+    ).round(3)
+    return df
+
 
 @app.route("/api/business-health-page", methods=["GET"])
 def business_health_page():
-	"""Combined Business Health dashboard: 4 linked charts in one page."""
-	if not DB_PATH.exists():
-		return jsonify({"error": f"Database not found: {DB_PATH}"}), 404
+    """Combined Business Health dashboard: 4 linked charts in one page."""
+    if not DB_PATH.exists():
+        return jsonify({"error": f"Database not found: {DB_PATH}"}), 404
 
-	conn = _get_db_connection()
-	try:
-		health_df = _compute_employer_health_scores(conn)
-		activity_df = pd.read_sql_query(
-			"""
+    conn = _get_db_connection()
+    try:
+        health_df = _compute_employer_health_scores(conn)
+        activity_df = pd.read_sql_query(
+            """
 			SELECT CAST(venueId AS INTEGER) AS employerId,
 			       strftime('%Y-%m', timestamp) AS month,
 			       COUNT(*) AS checkins
@@ -1809,48 +1999,54 @@ def business_health_page():
 			GROUP BY employerId, month
 			ORDER BY month
 			""",
-			conn,
-		)
-	finally:
-		conn.close()
+            conn,
+        )
+    finally:
+        conn.close()
 
-	if health_df.empty:
-		return jsonify({"error": "Not enough data to build business health page"}), 404
+    if health_df.empty:
+        return jsonify({"error": "Not enough data to build business health page"}), 404
 
-	months_list = sorted(activity_df["month"].unique().tolist()) if not activity_df.empty else []
+    months_list = (
+        sorted(activity_df["month"].unique().tolist()) if not activity_df.empty else []
+    )
 
-	act_map: dict = {}
-	for _, row in activity_df.iterrows():
-		eid = int(row["employerId"])
-		act_map.setdefault(eid, {})[row["month"]] = int(row["checkins"])
+    act_map: dict = {}
+    for _, row in activity_df.iterrows():
+        eid = int(row["employerId"])
+        act_map.setdefault(eid, {})[row["month"]] = int(row["checkins"])
 
-	def _cat(s: float) -> str:
-		return "Prosperous" if s >= 0.6 else "Neutral" if s >= 0.35 else "Struggling"
+    def _cat(s: float) -> str:
+        return "Prosperous" if s >= 0.6 else "Neutral" if s >= 0.35 else "Struggling"
 
-	employers = [
-		{
-			"id":            int(row["employerId"]),
-			"avg_rate":      round(float(row["avg_rate"]), 2),
-			"job_count":     int(row["job_count"]),
-			"stable":        int(row["stable"]),
-			"departed":      int(row["departed"]),
-			"arrived":       int(row["arrived"]),
-			"turnover_rate": round(float(row["turnover_rate"]), 3),
-			"score":         float(row["health_score"]),
-			"category":      _cat(float(row["health_score"])),
-			"activity":      [act_map.get(int(row["employerId"]), {}).get(m, 0) for m in months_list],
-		}
-		for _, row in health_df.sort_values("health_score", ascending=False).iterrows()
-	]
+    employers = [
+        {
+            "id": int(row["employerId"]),
+            "avg_rate": round(float(row["avg_rate"]), 2),
+            "job_count": int(row["job_count"]),
+            "stable": int(row["stable"]),
+            "departed": int(row["departed"]),
+            "arrived": int(row["arrived"]),
+            "turnover_rate": round(float(row["turnover_rate"]), 3),
+            "score": float(row["health_score"]),
+            "category": _cat(float(row["health_score"])),
+            "activity": [
+                act_map.get(int(row["employerId"]), {}).get(m, 0) for m in months_list
+            ],
+        }
+        for _, row in health_df.sort_values("health_score", ascending=False).iterrows()
+    ]
 
-	html = _render_business_health_page_html({"employers": employers, "months": months_list})
-	return html, 200, {"Content-Type": "text/html; charset=utf-8"}
+    html = _render_business_health_page_html(
+        {"employers": employers, "months": months_list}
+    )
+    return html, 200, {"Content-Type": "text/html; charset=utf-8"}
 
 
 def _render_business_health_page_html(data: dict) -> str:
-	import json as _json
+    import json as _json
 
-	page = r"""<!DOCTYPE html>
+    page = r"""<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
@@ -2280,21 +2476,21 @@ updateDetailsBar();
 </body>
 </html>"""
 
-	return page.replace("__DATA__", _json.dumps(data))
+    return page.replace("__DATA__", _json.dumps(data))
 
 
 @app.route("/api/overall-view-page", methods=["GET"])
 def overall_view_page():
-	"""Combined Overall View dashboard: KPIs + 4 linked charts in one page."""
-	if not DB_PATH.exists():
-		return jsonify({"error": f"Database not found: {DB_PATH}"}), 404
+    """Combined Overall View dashboard: KPIs + 4 linked charts in one page."""
+    if not DB_PATH.exists():
+        return jsonify({"error": f"Database not found: {DB_PATH}"}), 404
 
-	conn = _get_db_connection()
-	try:
-		health_df = _compute_employer_health_scores(conn)
+    conn = _get_db_connection()
+    try:
+        health_df = _compute_employer_health_scores(conn)
 
-		fin_df = pd.read_sql_query(
-			"""
+        fin_df = pd.read_sql_query(
+            """
 			SELECT strftime('%Y-%m', timestamp) AS month,
 			       SUM(CASE WHEN category = 'Wage' THEN amount ELSE 0 END) AS wage,
 			       SUM(CASE WHEN category IN ('Food','Shelter','Recreation','Education')
@@ -2302,151 +2498,181 @@ def overall_view_page():
 			FROM financialjournal
 			GROUP BY month ORDER BY month
 			""",
-			conn,
-		)
+            conn,
+        )
 
-		net_df = pd.read_sql_query(
-			"""
+        net_df = pd.read_sql_query(
+            """
 			SELECT participantId,
 			       SUM(CASE WHEN category='Wage' THEN amount ELSE 0 END) -
 			       SUM(CASE WHEN category IN ('Food','Shelter','Recreation','Education')
 			                THEN ABS(amount) ELSE 0 END) AS net_income
 			FROM financialjournal GROUP BY participantId
 			""",
-			conn,
-		)
+            conn,
+        )
 
-		earners_row = pd.read_sql_query(
-			"SELECT COUNT(DISTINCT participantId) AS n FROM financialjournal WHERE category='Wage'",
-			conn,
-		)
+        earners_row = pd.read_sql_query(
+            "SELECT COUNT(DISTINCT participantId) AS n FROM financialjournal WHERE category='Wage'",
+            conn,
+        )
 
-		emp_df  = pd.read_sql_query("SELECT employerId, location FROM employers", conn)
-		jobs_df = pd.read_sql_query(
-			"SELECT employerId, COUNT(*) AS job_count, AVG(hourlyRate) AS avg_rate FROM jobs GROUP BY employerId",
-			conn,
-		)
-		start_df, end_df = _get_job_transitions(conn)
-	finally:
-		conn.close()
+        emp_df = pd.read_sql_query("SELECT employerId, location FROM employers", conn)
+        jobs_df = pd.read_sql_query(
+            "SELECT employerId, COUNT(*) AS job_count, AVG(hourlyRate) AS avg_rate FROM jobs GROUP BY employerId",
+            conn,
+        )
+        start_df, end_df = _get_job_transitions(conn)
+    finally:
+        conn.close()
 
-	# ── KPIs ──────────────────────────────────────────────────────────────
-	total_wages    = round(float(fin_df["wage"].sum()),           2) if not fin_df.empty else 0
-	total_spending = round(float(fin_df["cost_of_living"].sum()), 2) if not fin_df.empty else 0
-	median_net     = round(float(net_df["net_income"].median()),  2) if not net_df.empty else 0
-	active_emp     = int(health_df["employerId"].nunique())           if not health_df.empty else 0
-	avg_turnover   = round(float(health_df["turnover_rate"].mean()) * 100, 1) if not health_df.empty else 0
-	active_earners = int(earners_row["n"].iloc[0])                    if not earners_row.empty else 0
+    # ── KPIs ──────────────────────────────────────────────────────────────
+    total_wages = round(float(fin_df["wage"].sum()), 2) if not fin_df.empty else 0
+    total_spending = (
+        round(float(fin_df["cost_of_living"].sum()), 2) if not fin_df.empty else 0
+    )
+    median_net = (
+        round(float(net_df["net_income"].median()), 2) if not net_df.empty else 0
+    )
+    active_emp = int(health_df["employerId"].nunique()) if not health_df.empty else 0
+    avg_turnover = (
+        round(float(health_df["turnover_rate"].mean()) * 100, 1)
+        if not health_df.empty
+        else 0
+    )
+    active_earners = int(earners_row["n"].iloc[0]) if not earners_row.empty else 0
 
-	def _fmt(n):
-		if abs(n) >= 1_000_000:
-			return f"${n/1_000_000:.1f}M"
-		if abs(n) >= 1_000:
-			return f"${n/1_000:.0f}K"
-		return f"${n:.0f}"
+    def _fmt(n):
+        if abs(n) >= 1_000_000:
+            return f"${n / 1_000_000:.1f}M"
+        if abs(n) >= 1_000:
+            return f"${n / 1_000:.0f}K"
+        return f"${n:.0f}"
 
-	kpis = {
-		"total_wages":      _fmt(total_wages),
-		"total_spending":   _fmt(total_spending),
-		"median_net":       _fmt(median_net),
-		"turnover_rate":    f"{avg_turnover}%",
-		"active_employers": str(active_emp),
-		"active_earners":   str(active_earners),
-	}
+    kpis = {
+        "total_wages": _fmt(total_wages),
+        "total_spending": _fmt(total_spending),
+        "median_net": _fmt(median_net),
+        "turnover_rate": f"{avg_turnover}%",
+        "active_employers": str(active_emp),
+        "active_earners": str(active_earners),
+    }
 
-	# ── Line chart data ────────────────────────────────────────────────────
-	if not fin_df.empty:
-		fin_df["net_income"] = fin_df["wage"] - fin_df["cost_of_living"]
-		line_data = {
-			"months": fin_df["month"].tolist(),
-			"series": [
-				{"name": "Wage",           "values": [round(v, 2) for v in fin_df["wage"].tolist()],           "color": "#2ca02c"},
-				{"name": "Cost of Living", "values": [round(v, 2) for v in fin_df["cost_of_living"].tolist()], "color": "#d62728"},
-				{"name": "Net Income",     "values": [round(v, 2) for v in fin_df["net_income"].tolist()],     "color": "#1f77b4"},
-			],
-		}
-	else:
-		line_data = {"months": [], "series": []}
+    # ── Line chart data ────────────────────────────────────────────────────
+    if not fin_df.empty:
+        fin_df["net_income"] = fin_df["wage"] - fin_df["cost_of_living"]
+        line_data = {
+            "months": fin_df["month"].tolist(),
+            "series": [
+                {
+                    "name": "Wage",
+                    "values": [round(v, 2) for v in fin_df["wage"].tolist()],
+                    "color": "#2ca02c",
+                },
+                {
+                    "name": "Cost of Living",
+                    "values": [round(v, 2) for v in fin_df["cost_of_living"].tolist()],
+                    "color": "#d62728",
+                },
+                {
+                    "name": "Net Income",
+                    "values": [round(v, 2) for v in fin_df["net_income"].tolist()],
+                    "color": "#1f77b4",
+                },
+            ],
+        }
+    else:
+        line_data = {"months": [], "series": []}
 
-	# ── Employer data (scatter + ranking) ──────────────────────────────────
-	def _cat(s):
-		return "Prosperous" if s >= 0.6 else "Neutral" if s >= 0.35 else "Struggling"
+    # ── Employer data (scatter + ranking) ──────────────────────────────────
+    def _cat(s):
+        return "Prosperous" if s >= 0.6 else "Neutral" if s >= 0.35 else "Struggling"
 
-	employers = []
-	if not health_df.empty:
-		employers = [
-			{
-				"id":            int(row["employerId"]),
-				"avg_rate":      round(float(row["avg_rate"]),      2),
-				"job_count":     int(row["job_count"]),
-				"stable":        int(row["stable"]),
-				"departed":      int(row["departed"]),
-				"arrived":       int(row["arrived"]),
-				"turnover_rate": round(float(row["turnover_rate"]), 3),
-				"score":         round(float(row["health_score"]),  3),
-				"category":      _cat(float(row["health_score"])),
-			}
-			for _, row in health_df.sort_values("health_score", ascending=False).iterrows()
-		]
+    employers = []
+    if not health_df.empty:
+        employers = [
+            {
+                "id": int(row["employerId"]),
+                "avg_rate": round(float(row["avg_rate"]), 2),
+                "job_count": int(row["job_count"]),
+                "stable": int(row["stable"]),
+                "departed": int(row["departed"]),
+                "arrived": int(row["arrived"]),
+                "turnover_rate": round(float(row["turnover_rate"]), 3),
+                "score": round(float(row["health_score"]), 3),
+                "category": _cat(float(row["health_score"])),
+            }
+            for _, row in health_df.sort_values(
+                "health_score", ascending=False
+            ).iterrows()
+        ]
 
-	# ── Symbol map data ────────────────────────────────────────────────────
-	health_by_id = {e["id"]: e for e in employers}
-	emp_df = emp_df.merge(jobs_df, on="employerId", how="left").fillna({"job_count": 1, "avg_rate": 0})
+    # ── Symbol map data ────────────────────────────────────────────────────
+    health_by_id = {e["id"]: e for e in employers}
+    emp_df = emp_df.merge(jobs_df, on="employerId", how="left").fillna(
+        {"job_count": 1, "avg_rate": 0}
+    )
 
-	if not start_df.empty and not end_df.empty:
-		all_emp = set(start_df["employerId"].dropna().astype(int)) | set(end_df["employerId"].dropna().astype(int))
-		turnover_map = {}
-		for eid in all_emp:
-			s = set(start_df[start_df["employerId"] == eid]["participantId"])
-			e = set(end_df[end_df["employerId"]   == eid]["participantId"])
-			turnover_map[int(eid)] = len(s.symmetric_difference(e))
-	else:
-		turnover_map = {}
+    if not start_df.empty and not end_df.empty:
+        all_emp = set(start_df["employerId"].dropna().astype(int)) | set(
+            end_df["employerId"].dropna().astype(int)
+        )
+        turnover_map = {}
+        for eid in all_emp:
+            s = set(start_df[start_df["employerId"] == eid]["participantId"])
+            e = set(end_df[end_df["employerId"] == eid]["participantId"])
+            turnover_map[int(eid)] = len(s.symmetric_difference(e))
+    else:
+        turnover_map = {}
 
-	symbols = []
-	for _, row in emp_df.iterrows():
-		px, py = _parse_wkt_point(str(row["location"]))
-		if px is None:
-			continue
-		eid = int(row["employerId"])
-		h   = health_by_id.get(eid, {})
-		symbols.append({
-			"id":        eid,
-			"x":         px,
-			"y":         py,
-			"job_count": int(row["job_count"]),
-			"avg_rate":  round(float(row["avg_rate"]), 2),
-			"turnover":  turnover_map.get(eid, 0),
-			"score":     h.get("score",    0.5),
-			"category":  h.get("category", "Neutral"),
-		})
+    symbols = []
+    for _, row in emp_df.iterrows():
+        px, py = _parse_wkt_point(str(row["location"]))
+        if px is None:
+            continue
+        eid = int(row["employerId"])
+        h = health_by_id.get(eid, {})
+        symbols.append(
+            {
+                "id": eid,
+                "x": px,
+                "y": py,
+                "job_count": int(row["job_count"]),
+                "avg_rate": round(float(row["avg_rate"]), 2),
+                "turnover": turnover_map.get(eid, 0),
+                "score": h.get("score", 0.5),
+                "category": h.get("category", "Neutral"),
+            }
+        )
 
-	# ── Buildings for map background ───────────────────────────────────────
-	buildings_path = Path(__file__).resolve().parent / "buildings.json"
-	buildings = []
-	if buildings_path.exists():
-		import json as _jj
-		raw = _jj.loads(buildings_path.read_text(encoding="utf-8"))
-		buildings = [
-			{"coords": b["coords"], "type": b.get("type", "")}
-			for b in raw if b.get("coords")
-		]
+    # ── Buildings for map background ───────────────────────────────────────
+    buildings_path = Path(__file__).resolve().parent / "buildings.json"
+    buildings = []
+    if buildings_path.exists():
+        import json as _jj
 
-	data = {
-		"kpis":      kpis,
-		"line":      line_data,
-		"employers": employers,
-		"symbols":   symbols,
-		"buildings": buildings,
-	}
-	html = _render_overall_view_html(data)
-	return html, 200, {"Content-Type": "text/html; charset=utf-8"}
+        raw = _jj.loads(buildings_path.read_text(encoding="utf-8"))
+        buildings = [
+            {"coords": b["coords"], "type": b.get("type", "")}
+            for b in raw
+            if b.get("coords")
+        ]
+
+    data = {
+        "kpis": kpis,
+        "line": line_data,
+        "employers": employers,
+        "symbols": symbols,
+        "buildings": buildings,
+    }
+    html = _render_overall_view_html(data)
+    return html, 200, {"Content-Type": "text/html; charset=utf-8"}
 
 
 def _render_overall_view_html(data: dict) -> str:
-	import json as _json
+    import json as _json
 
-	page = r"""<!DOCTYPE html>
+    page = r"""<!DOCTYPE html>
 <html><head>
 <meta charset="utf-8">
 <title>Overall View</title>
@@ -2744,138 +2970,190 @@ drawMap();
 </script>
 </body></html>"""
 
-	return page.replace("__DATA__", _json.dumps(data))
+    return page.replace("__DATA__", _json.dumps(data))
 
 
 @app.route("/api/resident-financial-page", methods=["GET"])
 def resident_financial_page():
-	"""Combined Resident Financial Health dashboard: 5 charts in one page."""
-	if not DB_PATH.exists():
-		return jsonify({"error": f"Database not found: {DB_PATH}"}), 404
+    """Combined Resident Financial Health dashboard: 5 charts in one page."""
+    if not DB_PATH.exists():
+        return jsonify({"error": f"Database not found: {DB_PATH}"}), 404
 
-	conn = _get_db_connection()
-	try:
-		cat_df = pd.read_sql_query(
-			"""SELECT strftime('%Y-%m', timestamp) AS month, category,
+    conn = _get_db_connection()
+    try:
+        cat_df = pd.read_sql_query(
+            """SELECT strftime('%Y-%m', timestamp) AS month, category,
 			          SUM(amount) AS total_amount
 			   FROM financialjournal
 			   GROUP BY month, category ORDER BY month, category""",
-			conn,
-		)
-		wc_df = pd.read_sql_query(
-			"""SELECT strftime('%Y-%m', timestamp) AS month,
+            conn,
+        )
+        wc_df = pd.read_sql_query(
+            """SELECT strftime('%Y-%m', timestamp) AS month,
 			          SUM(CASE WHEN category='Wage' THEN amount ELSE 0 END) AS wage,
 			          SUM(CASE WHEN category IN ('Food','Shelter','Recreation','Education')
 			                   THEN ABS(amount) ELSE 0 END) AS cost_of_living
 			   FROM financialjournal GROUP BY month ORDER BY month""",
-			conn,
-		)
-		ni_df = pd.read_sql_query(
-			"""SELECT participantId,
+            conn,
+        )
+        ni_df = pd.read_sql_query(
+            """SELECT participantId,
 			          SUM(CASE WHEN category='Wage' THEN amount ELSE 0 END) AS total_wage,
 			          SUM(CASE WHEN category IN ('Food','Shelter','Recreation','Education')
 			                   THEN ABS(amount) ELSE 0 END) AS total_expenses,
 			          SUM(amount) AS net_income
 			   FROM financialjournal GROUP BY participantId""",
-			conn,
-		)
-		p_df = pd.read_sql_query(
-			"SELECT participantId, educationLevel, age, joviality, householdSize, interestGroup FROM participants",
-			conn,
-		)
-	finally:
-		conn.close()
+            conn,
+        )
+        p_df = pd.read_sql_query(
+            "SELECT participantId, educationLevel, age, joviality, householdSize, interestGroup FROM participants",
+            conn,
+        )
+    finally:
+        conn.close()
 
-	# ── Financial categories line ──────────────────────────────────────────
-	if not cat_df.empty:
-		months_cat = sorted(cat_df["month"].dropna().unique().tolist())
-		cats       = sorted(cat_df["category"].dropna().unique().tolist())
-		pivot      = (cat_df.pivot(index="month", columns="category", values="total_amount")
-		              .reindex(months_cat).fillna(0))
-		cat_data = {
-			"months": months_cat,
-			"series": [{"name": c, "values": [round(float(v), 2) for v in pivot[c].tolist()]}
-			           for c in cats if c in pivot.columns],
-		}
-	else:
-		cat_data = {"months": [], "series": []}
+    # ── Financial categories line ──────────────────────────────────────────
+    if not cat_df.empty:
+        months_cat = sorted(cat_df["month"].dropna().unique().tolist())
+        cats = sorted(cat_df["category"].dropna().unique().tolist())
+        pivot = (
+            cat_df.pivot(index="month", columns="category", values="total_amount")
+            .reindex(months_cat)
+            .fillna(0)
+        )
+        cat_data = {
+            "months": months_cat,
+            "series": [
+                {"name": c, "values": [round(float(v), 2) for v in pivot[c].tolist()]}
+                for c in cats
+                if c in pivot.columns
+            ],
+        }
+    else:
+        cat_data = {"months": [], "series": []}
 
-	# ── Wages vs cost line ─────────────────────────────────────────────────
-	if not wc_df.empty:
-		wc_df["net_income"] = wc_df["wage"] - wc_df["cost_of_living"]
-		wc_data = {
-			"months": wc_df["month"].tolist(),
-			"series": [
-				{"name": "Wage",           "values": [round(v, 2) for v in wc_df["wage"].tolist()],           "color": "#2ca02c"},
-				{"name": "Cost of Living", "values": [round(v, 2) for v in wc_df["cost_of_living"].tolist()], "color": "#d62728"},
-				{"name": "Net Income",     "values": [round(v, 2) for v in wc_df["net_income"].tolist()],     "color": "#1f77b4"},
-			],
-		}
-	else:
-		wc_data = {"months": [], "series": []}
+    # ── Wages vs cost line ─────────────────────────────────────────────────
+    if not wc_df.empty:
+        wc_df["net_income"] = wc_df["wage"] - wc_df["cost_of_living"]
+        wc_data = {
+            "months": wc_df["month"].tolist(),
+            "series": [
+                {
+                    "name": "Wage",
+                    "values": [round(v, 2) for v in wc_df["wage"].tolist()],
+                    "color": "#2ca02c",
+                },
+                {
+                    "name": "Cost of Living",
+                    "values": [round(v, 2) for v in wc_df["cost_of_living"].tolist()],
+                    "color": "#d62728",
+                },
+                {
+                    "name": "Net Income",
+                    "values": [round(v, 2) for v in wc_df["net_income"].tolist()],
+                    "color": "#1f77b4",
+                },
+            ],
+        }
+    else:
+        wc_data = {"months": [], "series": []}
 
-	# ── Per-participant net income ─────────────────────────────────────────
-	ni_records = [
-		{"id": int(r["participantId"]),
-		 "net": round(float(r["net_income"]), 2),
-		 "wage": round(float(r["total_wage"]), 2),
-		 "exp": round(float(r["total_expenses"]), 2)}
-		for _, r in ni_df.iterrows()
-	] if not ni_df.empty else []
+    # ── Per-participant net income ─────────────────────────────────────────
+    ni_records = (
+        [
+            {
+                "id": int(r["participantId"]),
+                "net": round(float(r["net_income"]), 2),
+                "wage": round(float(r["total_wage"]), 2),
+                "exp": round(float(r["total_expenses"]), 2),
+            }
+            for _, r in ni_df.iterrows()
+        ]
+        if not ni_df.empty
+        else []
+    )
 
-	# ── Group comparison + parallel coords ────────────────────────────────
-	group_data = {"groups": [], "series": []}
-	pc_data    = {"records": [], "axes": [], "axis_labels": {}}
+    # ── Group comparison + parallel coords ────────────────────────────────
+    group_data = {"groups": [], "series": []}
+    pc_data = {"records": [], "axes": [], "axis_labels": {}}
 
-	if not p_df.empty and not ni_df.empty:
-		p_df["participantId"]  = pd.to_numeric(p_df["participantId"],  errors="coerce")
-		ni_df["participantId"] = pd.to_numeric(ni_df["participantId"], errors="coerce")
-		merged = p_df.merge(ni_df, on="participantId", how="inner")
+    if not p_df.empty and not ni_df.empty:
+        p_df["participantId"] = pd.to_numeric(p_df["participantId"], errors="coerce")
+        ni_df["participantId"] = pd.to_numeric(ni_df["participantId"], errors="coerce")
+        merged = p_df.merge(ni_df, on="participantId", how="inner")
 
-		ORDER = {"Low": 0, "HighSchoolOrCollege": 1, "Bachelors": 2, "Graduate": 3}
-		grp = (merged.groupby("educationLevel")
-		       .agg(avg_wage=("total_wage","mean"), avg_exp=("total_expenses","mean"), avg_net=("net_income","mean"))
-		       .reset_index())
-		grp["_k"] = grp["educationLevel"].map(ORDER).fillna(99)
-		grp = grp.sort_values("_k")
+        ORDER = {"Low": 0, "HighSchoolOrCollege": 1, "Bachelors": 2, "Graduate": 3}
+        grp = (
+            merged.groupby("educationLevel")
+            .agg(
+                avg_wage=("total_wage", "mean"),
+                avg_exp=("total_expenses", "mean"),
+                avg_net=("net_income", "mean"),
+            )
+            .reset_index()
+        )
+        grp["_k"] = grp["educationLevel"].map(ORDER).fillna(99)
+        grp = grp.sort_values("_k")
 
-		group_data = {
-			"groups": grp["educationLevel"].tolist(),
-			"series": [
-				{"name": "Total Wage",     "values": [round(float(v),0) for v in grp["avg_wage"].tolist()], "color": "#2ca02c"},
-				{"name": "Total Expenses", "values": [round(float(v),0) for v in grp["avg_exp"].tolist()],  "color": "#d62728"},
-				{"name": "Net Income",     "values": [round(float(v),0) for v in grp["avg_net"].tolist()],  "color": "#1f77b4"},
-			],
-		}
+        group_data = {
+            "groups": grp["educationLevel"].tolist(),
+            "series": [
+                {
+                    "name": "Total Wage",
+                    "values": [round(float(v), 0) for v in grp["avg_wage"].tolist()],
+                    "color": "#2ca02c",
+                },
+                {
+                    "name": "Total Expenses",
+                    "values": [round(float(v), 0) for v in grp["avg_exp"].tolist()],
+                    "color": "#d62728",
+                },
+                {
+                    "name": "Net Income",
+                    "values": [round(float(v), 0) for v in grp["avg_net"].tolist()],
+                    "color": "#1f77b4",
+                },
+            ],
+        }
 
-		axes = ["total_wage", "total_expenses", "net_income", "joviality", "age", "householdSize"]
-		pc_data = {
-			"records": [
-				{"edu": r["educationLevel"], "ig": r["interestGroup"],
-				 **{k: round(float(r[k]), 2) for k in axes if pd.notna(r[k])}}
-				for _, r in merged.iterrows()
-				if all(pd.notna(r[k]) for k in axes)
-			],
-			"axes": axes,
-			"axis_labels": {
-				"total_wage":     "Total Wage ($)",
-				"total_expenses": "Total Expenses ($)",
-				"net_income":     "Net Income ($)",
-				"joviality":      "Joviality",
-				"age":            "Age",
-				"householdSize":  "Household Size",
-			},
-		}
+        axes = [
+            "total_wage",
+            "total_expenses",
+            "net_income",
+            "joviality",
+            "age",
+            "householdSize",
+        ]
+        pc_data = {
+            "records": [
+                {
+                    "edu": r["educationLevel"],
+                    "ig": r["interestGroup"],
+                    **{k: round(float(r[k]), 2) for k in axes if pd.notna(r[k])},
+                }
+                for _, r in merged.iterrows()
+                if all(pd.notna(r[k]) for k in axes)
+            ],
+            "axes": axes,
+            "axis_labels": {
+                "total_wage": "Total Wage ($)",
+                "total_expenses": "Total Expenses ($)",
+                "net_income": "Net Income ($)",
+                "joviality": "Joviality",
+                "age": "Age",
+                "householdSize": "Household Size",
+            },
+        }
 
-	data = {
-		"categories": cat_data,
-		"wages_cost": wc_data,
-		"net_income": ni_records,
-		"groups":     group_data,
-		"parallel":   pc_data,
-	}
-	html = _render_resident_financial_html(data)
-	return html, 200, {"Content-Type": "text/html; charset=utf-8"}
+    data = {
+        "categories": cat_data,
+        "wages_cost": wc_data,
+        "net_income": ni_records,
+        "groups": group_data,
+        "parallel": pc_data,
+    }
+    html = _render_resident_financial_html(data)
+    return html, 200, {"Content-Type": "text/html; charset=utf-8"}
 
 
 @app.route('/api/employer_summary', methods=['GET'])
@@ -2886,8 +3164,8 @@ def api_employer_summary():
 	enrich employer sidecards without requiring the full embedded HTML.
 	"""
 	try:
-		from pathlib import Path
 		import json
+		from pathlib import Path
 		summary_path = Path(__file__).resolve().parent / 'employer_health_summary.json'
 		if not summary_path.exists():
 			return jsonify({'error': 'summary not available'}), 404
@@ -2906,8 +3184,8 @@ def api_employers():
 	query the database for basic fields (employerId, job count, avg rate).
 	"""
 	try:
-		from pathlib import Path
 		import json
+		from pathlib import Path
 
 		summary_path = Path(__file__).resolve().parent / 'employer_health_summary.json'
 		if summary_path.exists():
@@ -2953,9 +3231,9 @@ def api_employers():
 
 
 def _render_resident_financial_html(data: dict) -> str:
-	import json as _json
+    import json as _json
 
-	page = r"""<!DOCTYPE html>
+    page = r"""<!DOCTYPE html>
 <html><head>
 <meta charset="utf-8">
 <title>Resident Financial Health</title>
@@ -3263,160 +3541,203 @@ drawParallelCoords();
 </script>
 </body></html>"""
 
-	return page.replace("__DATA__", _json.dumps(data))
+    return page.replace("__DATA__", _json.dumps(data))
 
 
 @app.route("/api/employment-page", methods=["GET"])
 def employment_page():
-	"""Combined Employment & Turnover dashboard: 4 charts in one page."""
-	if not DB_PATH.exists():
-		return jsonify({"error": f"Database not found: {DB_PATH}"}), 404
+    """Combined Employment & Turnover dashboard: 4 charts in one page."""
+    if not DB_PATH.exists():
+        return jsonify({"error": f"Database not found: {DB_PATH}"}), 404
 
-	conn = _get_db_connection()
-	try:
-		# ── 1. Turnover ranking ────────────────────────────────────────────
-		start_df, end_df = _get_job_transitions(conn)
+    conn = _get_db_connection()
+    try:
+        # ── 1. Turnover ranking ────────────────────────────────────────────
+        start_df, end_df = _get_job_transitions(conn)
 
-		# ── 2. Small multiples ─────────────────────────────────────────────
-		sm_df = pd.read_sql_query(
-			"""SELECT strftime('%Y-%m', timestamp) AS month,
+        # ── 2. Small multiples ─────────────────────────────────────────────
+        sm_df = pd.read_sql_query(
+            """SELECT strftime('%Y-%m', timestamp) AS month,
 			          venueId AS employerId,
 			          COUNT(DISTINCT participantId) AS workers
 			   FROM checkinjournal WHERE venueType='Workplace'
 			   GROUP BY month, venueId ORDER BY month, venueId""",
-			conn,
-		)
+            conn,
+        )
 
-		# ── 3. Workforce participation ─────────────────────────────────────
-		wf_df = pd.read_sql_query(
-			"""SELECT strftime('%Y-%m', timestamp) AS month,
+        # ── 3. Workforce participation ─────────────────────────────────────
+        wf_df = pd.read_sql_query(
+            """SELECT strftime('%Y-%m', timestamp) AS month,
 			          COUNT(DISTINCT participantId) AS active_workers,
 			          SUM(amount)/COUNT(DISTINCT participantId) AS avg_wage
 			   FROM financialjournal WHERE category='Wage'
 			   GROUP BY month ORDER BY month""",
-			conn,
-		)
+            conn,
+        )
 
-		# ── 4. Job transitions sankey ──────────────────────────────────────
-		tbl_rows = conn.execute(
-			"SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'participantstatuslogs%'"
-		).fetchall()
-		tables = sorted([r[0] for r in tbl_rows],
-		                key=lambda t: int(re.search(r"(\d+)$", t).group(1)))
+        # ── 4. Job transitions sankey ──────────────────────────────────────
+        tbl_rows = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'participantstatuslogs%'"
+        ).fetchall()
+        tables = sorted(
+            [r[0] for r in tbl_rows],
+            key=lambda t: int(re.search(r"(\d+)$", t).group(1)),
+        )
 
-		sankey_nodes, sankey_links = [], []
-		if len(tables) >= 2:
-			jobs_edu = pd.read_sql_query(
-				"SELECT jobId, educationRequirement FROM jobs WHERE educationRequirement IS NOT NULL",
-				conn,
-			)
+        sankey_nodes, sankey_links = [], []
+        if len(tables) >= 2:
+            jobs_edu = pd.read_sql_query(
+                "SELECT jobId, educationRequirement FROM jobs WHERE educationRequirement IS NOT NULL",
+                conn,
+            )
 
-			def dominant_sector(tbl: str) -> pd.DataFrame:
-				df = pd.read_sql_query(
-					f"""SELECT participantId, jobId, COUNT(*) AS cnt
+            def dominant_sector(tbl: str) -> pd.DataFrame:
+                df = pd.read_sql_query(
+                    f"""SELECT participantId, jobId, COUNT(*) AS cnt
 					    FROM "{tbl}"
 					    WHERE jobId IS NOT NULL
 					      AND TRIM(CAST(jobId AS TEXT)) NOT IN ('','N/A','nan')
 					    GROUP BY participantId, jobId""",
-					conn,
-				)
-				if df.empty:
-					return pd.DataFrame(columns=["participantId","educationRequirement"])
-				top = (df.sort_values("cnt", ascending=False)
-				         .groupby("participantId").first().reset_index()
-				         [["participantId","jobId"]])
-				top["jobId"] = pd.to_numeric(top["jobId"], errors="coerce")
-				return top.merge(jobs_edu, on="jobId", how="left")[
-					["participantId","educationRequirement"]].dropna()
+                    conn,
+                )
+                if df.empty:
+                    return pd.DataFrame(
+                        columns=["participantId", "educationRequirement"]
+                    )
+                top = (
+                    df.sort_values("cnt", ascending=False)
+                    .groupby("participantId")
+                    .first()
+                    .reset_index()[["participantId", "jobId"]]
+                )
+                top["jobId"] = pd.to_numeric(top["jobId"], errors="coerce")
+                return top.merge(jobs_edu, on="jobId", how="left")[
+                    ["participantId", "educationRequirement"]
+                ].dropna()
 
-			start_s = dominant_sector(tables[0])
-			end_s   = dominant_sector(tables[-1])
+            start_s = dominant_sector(tables[0])
+            end_s = dominant_sector(tables[-1])
 
-			if not start_s.empty and not end_s.empty:
-				merged_s = start_s.merge(end_s, on="participantId",
-				                         suffixes=("_start","_end"))
-				flows = (merged_s
-				         .groupby(["educationRequirement_start","educationRequirement_end"])
-				         .size().reset_index(name="count"))
-				edu_order = ["Low","HighSchoolOrCollege","Bachelors","Graduate"]
-				left_lbls  = [f"{e} (Start)" for e in edu_order
-				              if e in flows["educationRequirement_start"].values]
-				right_lbls = [f"{e} (End)"   for e in edu_order
-				              if e in flows["educationRequirement_end"].values]
-				all_lbls   = left_lbls + [l for l in right_lbls if l not in left_lbls]
-				node_idx   = {lbl: i for i, lbl in enumerate(all_lbls)}
-				sankey_nodes = [{"id": i, "name": lbl} for lbl, i in node_idx.items()]
-				sankey_links = [
-					{"source": node_idx[f"{r['educationRequirement_start']} (Start)"],
-					 "target": node_idx[f"{r['educationRequirement_end']} (End)"],
-					 "value":  int(r["count"])}
-					for _, r in flows.iterrows()
-					if f"{r['educationRequirement_start']} (Start)" in node_idx
-					and f"{r['educationRequirement_end']} (End)" in node_idx
-				]
-	finally:
-		conn.close()
+            if not start_s.empty and not end_s.empty:
+                merged_s = start_s.merge(
+                    end_s, on="participantId", suffixes=("_start", "_end")
+                )
+                flows = (
+                    merged_s.groupby(
+                        ["educationRequirement_start", "educationRequirement_end"]
+                    )
+                    .size()
+                    .reset_index(name="count")
+                )
+                edu_order = ["Low", "HighSchoolOrCollege", "Bachelors", "Graduate"]
+                left_lbls = [
+                    f"{e} (Start)"
+                    for e in edu_order
+                    if e in flows["educationRequirement_start"].values
+                ]
+                right_lbls = [
+                    f"{e} (End)"
+                    for e in edu_order
+                    if e in flows["educationRequirement_end"].values
+                ]
+                all_lbls = left_lbls + [l for l in right_lbls if l not in left_lbls]
+                node_idx = {lbl: i for i, lbl in enumerate(all_lbls)}
+                sankey_nodes = [{"id": i, "name": lbl} for lbl, i in node_idx.items()]
+                sankey_links = [
+                    {
+                        "source": node_idx[
+                            f"{r['educationRequirement_start']} (Start)"
+                        ],
+                        "target": node_idx[f"{r['educationRequirement_end']} (End)"],
+                        "value": int(r["count"]),
+                    }
+                    for _, r in flows.iterrows()
+                    if f"{r['educationRequirement_start']} (Start)" in node_idx
+                    and f"{r['educationRequirement_end']} (End)" in node_idx
+                ]
+    finally:
+        conn.close()
 
-	# ── Build turnover records ─────────────────────────────────────────────
-	turnover = []
-	if not start_df.empty and not end_df.empty:
-		all_emp = set(start_df["employerId"].dropna().astype(int)) | \
-		          set(end_df["employerId"].dropna().astype(int))
-		for emp in all_emp:
-			sp = set(start_df[start_df["employerId"]==emp]["participantId"])
-			ep = set(end_df[end_df["employerId"]==emp]["participantId"])
-			dep = len(sp - ep); arr = len(ep - sp); stb = len(sp & ep)
-			turnover.append({
-				"id": int(emp), "departed": dep, "arrived": arr,
-				"stable": stb, "total": max(len(sp),1),
-				"count": dep+arr,
-				"rate":  round((dep+arr)/max(len(sp),1), 3),
-			})
-		turnover = sorted(turnover, key=lambda x: x["count"], reverse=True)[:60]
+    # ── Build turnover records ─────────────────────────────────────────────
+    turnover = []
+    if not start_df.empty and not end_df.empty:
+        all_emp = set(start_df["employerId"].dropna().astype(int)) | set(
+            end_df["employerId"].dropna().astype(int)
+        )
+        for emp in all_emp:
+            sp = set(start_df[start_df["employerId"] == emp]["participantId"])
+            ep = set(end_df[end_df["employerId"] == emp]["participantId"])
+            dep = len(sp - ep)
+            arr = len(ep - sp)
+            stb = len(sp & ep)
+            turnover.append(
+                {
+                    "id": int(emp),
+                    "departed": dep,
+                    "arrived": arr,
+                    "stable": stb,
+                    "total": max(len(sp), 1),
+                    "count": dep + arr,
+                    "rate": round((dep + arr) / max(len(sp), 1), 3),
+                }
+            )
+        turnover = sorted(turnover, key=lambda x: x["count"], reverse=True)[:60]
 
-	# ── Build small multiples ──────────────────────────────────────────────
-	sm_data = {"months": [], "panels": []}
-	if not sm_df.empty:
-		months_sm = sorted(sm_df["month"].unique().tolist())
-		top_n = 16
-		totals = sm_df.groupby("employerId")["workers"].sum().nlargest(top_n)
-		panels = []
-		for eid in totals.index:
-			sub = sm_df[sm_df["employerId"]==eid].set_index("month")["workers"]
-			panels.append({
-				"id": int(eid),
-				"total": int(totals[eid]),
-				"values": [int(sub.get(m, 0)) for m in months_sm],
-			})
-		sm_data = {"months": months_sm, "panels": panels}
+    # ── Build small multiples ──────────────────────────────────────────────
+    sm_data = {"months": [], "panels": []}
+    if not sm_df.empty:
+        months_sm = sorted(sm_df["month"].unique().tolist())
+        top_n = 16
+        totals = sm_df.groupby("employerId")["workers"].sum().nlargest(top_n)
+        panels = []
+        for eid in totals.index:
+            sub = sm_df[sm_df["employerId"] == eid].set_index("month")["workers"]
+            panels.append(
+                {
+                    "id": int(eid),
+                    "total": int(totals[eid]),
+                    "values": [int(sub.get(m, 0)) for m in months_sm],
+                }
+            )
+        sm_data = {"months": months_sm, "panels": panels}
 
-	# ── Build workforce data ───────────────────────────────────────────────
-	wf_data = {"months": [], "series": []}
-	if not wf_df.empty:
-		wf_data = {
-			"months": wf_df["month"].tolist(),
-			"series": [
-				{"name": "Active Wage Earners",   "values": [int(v)          for v in wf_df["active_workers"].tolist()], "color": "#2ca02c"},
-				{"name": "Avg Wage / Worker ($)",  "values": [round(float(v),2) for v in wf_df["avg_wage"].tolist()],       "color": "#ff7f0e"},
-			],
-		}
+    # ── Build workforce data ───────────────────────────────────────────────
+    wf_data = {"months": [], "series": []}
+    if not wf_df.empty:
+        wf_data = {
+            "months": wf_df["month"].tolist(),
+            "series": [
+                {
+                    "name": "Active Wage Earners",
+                    "values": [int(v) for v in wf_df["active_workers"].tolist()],
+                    "color": "#2ca02c",
+                },
+                {
+                    "name": "Avg Wage / Worker ($)",
+                    "values": [round(float(v), 2) for v in wf_df["avg_wage"].tolist()],
+                    "color": "#ff7f0e",
+                },
+            ],
+        }
 
-	data = {
-		"turnover":       turnover,
-		"small_multiples": sm_data,
-		"workforce":      wf_data,
-		"sankey":         {"nodes": sankey_nodes, "links": sankey_links},
-	}
-	html = _render_employment_html(data)
-	return html, 200, {"Content-Type": "text/html; charset=utf-8"}
+    data = {
+        "turnover": turnover,
+        "small_multiples": sm_data,
+        "workforce": wf_data,
+        "sankey": {"nodes": sankey_nodes, "links": sankey_links},
+    }
+    html = _render_employment_html(data)
+    return html, 200, {"Content-Type": "text/html; charset=utf-8"}
+
 
 @app.route("/api/job_transitions", methods=["GET"])
 def get_job_transitions():
+<<<<<<< HEAD
 	"""Get job transitions data for sankey visualization."""
 	try:
 		import json
 		from pathlib import Path
-		
+
 		# Load job_changes.json
 		job_changes_path = Path(__file__).resolve().parent / "job_changes.json"
 		if not job_changes_path.exists():
@@ -3496,6 +3817,91 @@ def get_job_transitions():
 	
 	except Exception as exc:
 		return jsonify({"error": f"Failed to load job transitions: {exc}"}), 500
+=======
+    """Get job transitions data for interactive map visualization."""
+    try:
+        import json
+        from pathlib import Path
+
+        # Load job_changes.json
+        job_changes_path = Path(__file__).resolve().parent / "job_changes.json"
+        if not job_changes_path.exists():
+            return jsonify({"error": "job_changes.json not found"}), 404
+
+        with open(job_changes_path, "r") as f:
+            job_changes = json.load(f)
+
+        # Load map_points.csv to get employers with coordinates
+        map_points_path = Path(__file__).resolve().parent / "map_points.csv"
+        employer_coords = {}
+        if map_points_path.exists():
+            with open(map_points_path, "r") as f:
+                lines = f.readlines()
+                for line in lines[1:]:  # Skip header
+                    parts = line.strip().split(",")
+                    if len(parts) >= 5:
+                        emp_id = int(parts[0])
+                        name = parts[1]
+                        category = parts[2]
+                        x = float(parts[3])
+                        y = float(parts[4])
+                        if category == "Employer":
+                            employer_coords[emp_id] = {"name": name, "x": x, "y": y}
+
+        # Process job_changes.json to extract transitions only between employers in map
+        links = []
+        all_employers = set()
+
+        for participant_id, transitions in job_changes.items():
+            for transition in transitions:
+                source = int(transition["source"])
+                target = int(transition["target"])
+                # Only include if both endpoints are in the map
+                if source in employer_coords and target in employer_coords:
+                    all_employers.add(source)
+                    all_employers.add(target)
+                    links.append({"source": source, "target": target, "value": 1})
+
+        # Aggregate links by source and target
+        link_dict = {}
+        for link in links:
+            key = (link["source"], link["target"])
+            link_dict[key] = link_dict.get(key, 0) + 1
+
+        # Convert to list of links with aggregated values
+        aggregated_links = [
+            {"source": src, "target": tgt, "value": count}
+            for (src, tgt), count in link_dict.items()
+        ]
+
+        # Only keep employers that have at least one transition
+        employers_with_transitions = set()
+        for link in aggregated_links:
+            employers_with_transitions.add(link["source"])
+            employers_with_transitions.add(link["target"])
+
+        # Create nodes list with coordinates
+        nodes = [
+            {
+                "id": emp_id,
+                "name": employer_coords[emp_id]["name"],
+                "x": employer_coords[emp_id]["x"],
+                "y": employer_coords[emp_id]["y"],
+            }
+            for emp_id in sorted(employers_with_transitions)
+        ]
+
+        # Keep links with original employer IDs
+        links_with_ids = [
+            {"source": link["source"], "target": link["target"], "value": link["value"]}
+            for link in aggregated_links
+        ]
+
+        return jsonify({"nodes": nodes, "links": links_with_ids})
+
+    except Exception as exc:
+        return jsonify({"error": f"Failed to load job transitions: {exc}"}), 500
+>>>>>>> 3c330ec (Solve CORS Issue on the backend requests)
 
 
 @app.route('/api/employer_financials_timeline/<int:employer_id>', methods=['GET'])
@@ -3598,9 +4004,10 @@ def api_employer_financials_timeline(employer_id: int):
 
 
 def _render_employment_html(data: dict) -> str:
-	import json as _json
+    import json as _json
 
-	page = r"""<!DOCTYPE html>
+    page = r"""
+<!DOCTYPE html>
 <html><head>
 <meta charset="utf-8">
 <title>Employment & Turnover</title>
@@ -3691,12 +4098,12 @@ function drawRanking(){
   if(!records.length) return;
 
   const W = el.clientWidth||420, barH = 18;
-  const m = {top:4,right:80,bottom:20,left:52};
-  const H = records.length*barH+m.top+m.bottom;
-  const w = W-m.left-m.right;
+  const m1 = {top:4, right:80, bottom:20, left:52};
+  const H = records.length*barH + m1.top + m1.bottom;
+  const w = W - m1.left - m1.right;
 
   const svg = d3.select(el).append('svg').attr('width',W).attr('height',H);
-  const g   = svg.append('g').attr('transform',`translate(${m.left},${m.top})`);
+  const g   = svg.append('g').attr('transform',`translate(${m1.left},${m1.top})`);
 
   const maxC = d3.max(records,d=>d.count);
   const x = d3.scaleLinear().domain([0,maxC]).range([0,w]);
@@ -3765,10 +4172,10 @@ function drawSmallMultiples(){
 	subDiv.textContent=`Total: ${panel.total.toLocaleString()} check-ins`;
 	div.appendChild(subDiv);
 
-	const W=160, H=60, m={top:2,right:4,bottom:14,left:18};
-	const w=W-m.left-m.right, h=H-m.top-m.bottom;
+	const W=160, H=60, m2={top:2, right:4, bottom:14, left:18};
+	const w=W - m2.left - m2.right, h=H - m2.top - m2.bottom;
 	const svg = d3.create('svg').attr('width',W).attr('height',H);
-	const g   = svg.append('g').attr('transform',`translate(${m.left},${m.top})`);
+	const g   = svg.append('g').attr('transform',`translate(${m2.left},${m2.top})`);
 
 	const x = d3.scalePoint().domain(months).range([0,w]);
 	const y = d3.scaleLinear().domain([0,d3.max(panel.values)||1]).nice().range([h,0]);
@@ -3806,11 +4213,11 @@ function highlightSmall(){
   if(!months.length) return;
   const el = document.getElementById('ch-workforce');
   const W = el.clientWidth||420, H = 260;
-  const m = {top:10,right:56,bottom:38,left:52};
-  const w = W-m.left-m.right, h = H-m.top-m.bottom;
+  const m3 = {top:10, right:56, bottom:38, left:52};
+  const w = W - m3.left - m3.right, h = H - m3.top - m3.bottom;
 
   const svg = d3.select(el).append('svg').attr('width',W).attr('height',H);
-  const g   = svg.append('g').attr('transform',`translate(${m.left},${m.top})`);
+  const g   = svg.append('g').attr('transform',`translate(${m3.left},${m3.top})`);
 
   const x   = d3.scalePoint().domain(months).range([0,w]);
   const yL  = d3.scaleLinear().domain(d3.extent(series[0].values)).nice().range([h,0]);
@@ -3844,8 +4251,8 @@ function highlightSmall(){
   if(!nodes.length||!links.length) return;
   const el = document.getElementById('ch-sankey');
   const W = el.clientWidth||420, H = 320;
-  const m = {top:10,right:10,bottom:10,left:10};
-  const w = W-m.left-m.right, h = H-m.top-m.bottom;
+  const m4 = {top:10, right:10, bottom:10, left:10};
+  const w = W - m4.left - m4.right, h = H - m4.top - m4.bottom;
 
   const layout = d3.sankey()
 	.nodeId(d=>d.id).nodeWidth(14).nodePadding(14)
@@ -3862,7 +4269,7 @@ function highlightSmall(){
   const nodeColor = d=>color(d.name.replace(/ \(.*\)/,''));
 
   const svg = d3.select(el).append('svg').attr('width',W).attr('height',H);
-  const g   = svg.append('g').attr('transform',`translate(${m.left},${m.top})`);
+  const g   = svg.append('g').attr('transform',`translate(${m4.left},${m4.top})`);
 
   g.selectAll('path').data(sl).join('path')
 	.attr('d',d3.sankeyLinkHorizontal())
@@ -3888,6 +4295,7 @@ function highlightSmall(){
 	.attr('font-size',10)
 	.text(d=>`${d.name.replace(/ \(.*\)/,'')} (${d.value})`);
 })();
+
 // ── Force-directed graph for job transitions between employers ──────────────────
 (function drawForceGraph(){
 	const el = document.getElementById('ch-chord');
@@ -4004,98 +4412,114 @@ highlightSmall();
 </script>
 </body></html>"""
 
-	return page.replace("__DATA__", _json.dumps(data))
+    return page.replace("__DATA__", _json.dumps(data))
+
+
 @app.route("/api/export/employer-health-csv", methods=["GET"])
 def export_employer_health_csv_endpoint():
-	"""Export employer health metrics as CSV and return as downloadable file."""
-	try:
-		output_path = export_employer_health_json()
-		return send_file(
-			output_path,
-			mimetype="application/json",
-			as_attachment=True,
-			download_name="employer_health_summary.json"
-		)
-	except FileNotFoundError as exc:
-		return jsonify({"error": str(exc)}), 404
-	except ValueError as exc:
-		return jsonify({"error": str(exc)}), 400
-	except Exception as exc:
-		return jsonify({"error": f"Failed to export: {exc}"}), 500
+    """Export employer health metrics as CSV and return as downloadable file."""
+    try:
+        output_path = export_employer_health_json()
+        return send_file(
+            output_path,
+            mimetype="application/json",
+            as_attachment=True,
+            download_name="employer_health_summary.json",
+        )
+    except FileNotFoundError as exc:
+        return jsonify({"error": str(exc)}), 404
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"error": f"Failed to export: {exc}"}), 500
 
 
 def export_employer_health_json(output_path: str | Path | None = None) -> Path:
-	"""Export employer health metrics to a single JSON file."""
-	if output_path is None:
-		output_path = Path(__file__).resolve().parent / "employer_health_summary.json"
-	else:
-		output_path = Path(output_path)
+    """Export employer health metrics to a single JSON file."""
+    if output_path is None:
+        output_path = Path(__file__).resolve().parent / "employer_health_summary.json"
+    else:
+        output_path = Path(output_path)
 
-	if not DB_PATH.exists():
-		raise FileNotFoundError(f"Database file not found: {DB_PATH}")
+    if not DB_PATH.exists():
+        raise FileNotFoundError(f"Database file not found: {DB_PATH}")
 
-	conn = _get_db_connection()
-	try:
-		health_df = _compute_employer_health_scores(conn)
-		if health_df.empty:
-			raise ValueError("No employer health data available.")
+    conn = _get_db_connection()
+    try:
+        health_df = _compute_employer_health_scores(conn)
+        if health_df.empty:
+            raise ValueError("No employer health data available.")
 
-		sector_df = pd.read_sql_query(
-			"""
+        sector_df = pd.read_sql_query(
+            """
 			SELECT employerId, educationRequirement AS sector, COUNT(*) AS cnt
 			FROM jobs
 			WHERE educationRequirement IS NOT NULL
 			GROUP BY employerId, educationRequirement
 			ORDER BY employerId, cnt DESC
 			""",
-			conn,
-		)
-		if not sector_df.empty:
-			sector_df = sector_df.sort_values(["employerId", "cnt"], ascending=[True, False])
-			sector_df = sector_df.groupby("employerId", as_index=False).first()[["employerId", "sector"]]
-		else:
-			sector_df = pd.DataFrame(columns=["employerId", "sector"])
+            conn,
+        )
+        if not sector_df.empty:
+            sector_df = sector_df.sort_values(
+                ["employerId", "cnt"], ascending=[True, False]
+            )
+            sector_df = sector_df.groupby("employerId", as_index=False).first()[
+                ["employerId", "sector"]
+            ]
+        else:
+            sector_df = pd.DataFrame(columns=["employerId", "sector"])
 
-		health_df["employerId"] = pd.to_numeric(health_df["employerId"], errors="coerce")
-		health_df["job_count"] = pd.to_numeric(health_df["job_count"], errors="coerce").fillna(0).astype(int)
-		health_df["avg_rate"] = pd.to_numeric(health_df["avg_rate"], errors="coerce").round(2)
-		health_df["turnover_count"] = (
-			pd.to_numeric(health_df["departed"], errors="coerce").fillna(0)
-			+ pd.to_numeric(health_df["arrived"], errors="coerce").fillna(0)
-		).astype(int)
+        health_df["employerId"] = pd.to_numeric(
+            health_df["employerId"], errors="coerce"
+        )
+        health_df["job_count"] = (
+            pd.to_numeric(health_df["job_count"], errors="coerce").fillna(0).astype(int)
+        )
+        health_df["avg_rate"] = pd.to_numeric(
+            health_df["avg_rate"], errors="coerce"
+        ).round(2)
+        health_df["turnover_count"] = (
+            pd.to_numeric(health_df["departed"], errors="coerce").fillna(0)
+            + pd.to_numeric(health_df["arrived"], errors="coerce").fillna(0)
+        ).astype(int)
 
-		export_df = health_df.merge(sector_df, on="employerId", how="left")
-		export_df["sector"] = export_df["sector"].fillna("Unknown")
-		export_df["health_category"] = export_df["health_score"].apply(
-			lambda s: "Prosperous" if s >= 0.6 else "Neutral" if s >= 0.35 else "Struggling"
-		)
+        export_df = health_df.merge(sector_df, on="employerId", how="left")
+        export_df["sector"] = export_df["sector"].fillna("Unknown")
+        export_df["health_category"] = export_df["health_score"].apply(
+            lambda s: (
+                "Prosperous" if s >= 0.6 else "Neutral" if s >= 0.35 else "Struggling"
+            )
+        )
 
-		result = export_df[[
-			"employerId",
-			"sector",
-			"job_count",
-			"avg_rate",
-			"turnover_count",
-			"turnover_rate",
-			"health_category",
-		]].rename(columns={
-			"employerId": "employerId",
-			"sector": "Sector",
-			"job_count": "JobCount",
-			"avg_rate": "AverageHourlyRate",
-			"turnover_count": "TurnoverCount",
-			"turnover_rate": "TurnoverRate",
-			"health_category": "HealthCategory",
-		})
+        result = export_df[
+            [
+                "employerId",
+                "sector",
+                "job_count",
+                "avg_rate",
+                "turnover_count",
+                "turnover_rate",
+                "health_category",
+            ]
+        ].rename(
+            columns={
+                "employerId": "employerId",
+                "sector": "Sector",
+                "job_count": "JobCount",
+                "avg_rate": "AverageHourlyRate",
+                "turnover_count": "TurnoverCount",
+                "turnover_rate": "TurnoverRate",
+                "health_category": "HealthCategory",
+            }
+        )
 
-		output_path.parent.mkdir(parents=True, exist_ok=True)
-		result.to_json(output_path, orient="records", indent=2)
-		return output_path
-	finally:
-		conn.close()
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        result.to_json(output_path, orient="records", indent=2)
+        return output_path
+    finally:
+        conn.close()
 
 
 if __name__ == "__main__":
-	app.run(debug=True, threaded=True, host="0.0.0.0", port=5000)
-
-
+    app.run(debug=True, threaded=True, host="0.0.0.0", port=5000)

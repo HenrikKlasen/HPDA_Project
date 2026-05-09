@@ -6,7 +6,7 @@ services:
     ports:
       - "5000:5000"
     volumes:
-      - ./vast_challenge.db:/app/vast_challenge.db
+      - ./backend/vast_challenge.db:/app/backend/vast_challenge.db
       - ./VAST-Challenge-2022:/app/VAST-Challenge-2022
     environment:
       - FLASK_ENV=development

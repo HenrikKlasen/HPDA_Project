@@ -8,4 +8,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY backend/ ./backend/
 EXPOSE 5000
 
-CMD ["python", "backend/server.py"]
+CMD ["python", "backend/d3js.py"]
