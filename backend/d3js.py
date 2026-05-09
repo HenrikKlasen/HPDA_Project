@@ -3291,6 +3291,99 @@ def employment_page():
 	html = _render_employment_html(data)
 	return html, 200, {"Content-Type": "text/html; charset=utf-8"}
 
+@app.route("/api/job_transitions", methods=["GET"])
+def get_job_transitions():
+	"""Get job transitions data for interactive map visualization."""
+	try:
+		import json
+		from pathlib import Path
+		
+		# Load job_changes.json
+		job_changes_path = Path(__file__).resolve().parent / "job_changes.json"
+		if not job_changes_path.exists():
+			return jsonify({"error": "job_changes.json not found"}), 404
+		
+		with open(job_changes_path, 'r') as f:
+			job_changes = json.load(f)
+		
+		# Load map_points.csv to get employers with coordinates
+		map_points_path = Path(__file__).resolve().parent / "map_points.csv"
+		employer_coords = {}
+		if map_points_path.exists():
+			with open(map_points_path, 'r') as f:
+				lines = f.readlines()
+				for line in lines[1:]:  # Skip header
+					parts = line.strip().split(',')
+					if len(parts) >= 5:
+						emp_id = int(parts[0])
+						name = parts[1]
+						category = parts[2]
+						x = float(parts[3])
+						y = float(parts[4])
+						if category == "Employer":
+							employer_coords[emp_id] = {'name': name, 'x': x, 'y': y}
+		
+		# Process job_changes.json to extract transitions only between employers in map
+		links = []
+		all_employers = set()
+		
+		for participant_id, transitions in job_changes.items():
+			for transition in transitions:
+				source = int(transition['source'])
+				target = int(transition['target'])
+				# Only include if both endpoints are in the map
+				if source in employer_coords and target in employer_coords:
+					all_employers.add(source)
+					all_employers.add(target)
+					links.append({
+						'source': source,
+						'target': target,
+						'value': 1
+					})
+		
+		# Aggregate links by source and target
+		link_dict = {}
+		for link in links:
+			key = (link['source'], link['target'])
+			link_dict[key] = link_dict.get(key, 0) + 1
+		
+		# Convert to list of links with aggregated values
+		aggregated_links = [
+			{'source': src, 'target': tgt, 'value': count}
+			for (src, tgt), count in link_dict.items()
+		]
+		
+		# Only keep employers that have at least one transition
+		employers_with_transitions = set()
+		for link in aggregated_links:
+			employers_with_transitions.add(link['source'])
+			employers_with_transitions.add(link['target'])
+		
+		# Create nodes list with coordinates
+		nodes = [
+			{
+				'id': emp_id,
+				'name': employer_coords[emp_id]['name'],
+				'x': employer_coords[emp_id]['x'],
+				'y': employer_coords[emp_id]['y']
+			}
+			for emp_id in sorted(employers_with_transitions)
+		]
+		
+		# Keep links with original employer IDs
+		links_with_ids = [
+			{'source': link['source'], 'target': link['target'], 'value': link['value']}
+			for link in aggregated_links
+		]
+		
+		return jsonify({
+			'nodes': nodes,
+			'links': links_with_ids
+		})
+	
+	except Exception as exc:
+		return jsonify({"error": f"Failed to load job transitions: {exc}"}), 500
+
 
 def _render_employment_html(data: dict) -> str:
 	import json as _json
@@ -3328,25 +3421,29 @@ body{font-family:Arial,sans-serif;background:#f4f5f7;color:#222;padding:16px}
 
 <div class="chart-grid">
   <div class="chart-panel" style="overflow-y:auto;max-height:480px">
-    <h3>Turnover Ranking by Employer</h3>
-    <p class="chart-note">Top 60 employers by turnover count. Click to highlight in small multiples.</p>
-    <div id="ch-ranking"></div>
+	<h3>Turnover Ranking by Employer</h3>
+	<p class="chart-note">Top 60 employers by turnover count. Click to highlight in small multiples.</p>
+	<div id="ch-ranking"></div>
   </div>
   <div class="chart-panel">
-    <h3>Monthly Worker Count — Small Multiples</h3>
-    <p class="chart-note">Top 16 employers by workplace check-ins. Selected employer highlighted in blue.</p>
-    <div class="sm-grid" id="ch-small"></div>
+	<h3>Monthly Worker Count — Small Multiples</h3>
+	<p class="chart-note">Top 16 employers by workplace check-ins. Selected employer highlighted in blue.</p>
+	<div class="sm-grid" id="ch-small"></div>
   </div>
   <div class="chart-panel">
-    <h3>Workforce Participation Over Time</h3>
-    <p class="chart-note">Active wage earners (green, left axis) and avg wage per worker (orange, right axis)</p>
-    <div id="ch-workforce"></div>
+	<h3>Workforce Participation Over Time</h3>
+	<p class="chart-note">Active wage earners (green, left axis) and avg wage per worker (orange, right axis)</p>
+	<div id="ch-workforce"></div>
   </div>
   <div class="chart-panel">
-    <h3>Job Transitions Between Sectors</h3>
-    <p class="chart-note">Participant movement by job sector (education requirement) — first vs last period</p>
-    <div id="ch-sankey"></div>
+	<h3>Job Transitions Between Sectors</h3>
+	<p class="chart-note">Participant movement by job sector (education requirement) — first vs last period</p>
+	<div id="ch-sankey"></div>
   </div>
+  <div class="chart-panel">
+	<h3>Job transitions between employers (Chords)</h3>
+	<p class="chart-note">Participant movement between employers — first vs last period</p>
+	<div id="ch-chord"></div>
 </div>
 
 <div class="tooltip" id="tip"></div>
@@ -3365,10 +3462,10 @@ function selectEmployer(id){
   selectedEmp = (selectedEmp===id)?null:id;
   const bar = document.getElementById('info-bar');
   if(selectedEmp){
-    bar.innerHTML=`Selected: <strong>Employer ${selectedEmp}</strong>
-      <span style="cursor:pointer;color:#2f5d8c;margin-left:8px" onclick="selectEmployer(${selectedEmp})">✕ clear</span>`;
+	bar.innerHTML=`Selected: <strong>Employer ${selectedEmp}</strong>
+	  <span style="cursor:pointer;color:#2f5d8c;margin-left:8px" onclick="selectEmployer(${selectedEmp})">✕ clear</span>`;
   } else {
-    bar.innerHTML='Click an employer bar in <strong>Turnover Ranking</strong> to highlight it in the small multiples grid.';
+	bar.innerHTML='Click an employer bar in <strong>Turnover Ranking</strong> to highlight it in the small multiples grid.';
   }
   drawRanking();
   highlightSmall();
@@ -3395,41 +3492,41 @@ function drawRanking(){
 
   // Stacked: departed (red) + arrived (blue)
   records.forEach(d=>{
-    const yo = y(d.id), bh = y.bandwidth();
-    const xDep = x(d.departed), xArr = x(d.arrived);
-    const isSelected = selectedEmp===d.id;
-    const opacity = !selectedEmp||isSelected ? 0.85 : 0.25;
+	const yo = y(d.id), bh = y.bandwidth();
+	const xDep = x(d.departed), xArr = x(d.arrived);
+	const isSelected = selectedEmp===d.id;
+	const opacity = !selectedEmp||isSelected ? 0.85 : 0.25;
 
-    g.append('rect').attr('x',0).attr('y',yo).attr('width',xDep).attr('height',bh)
-      .attr('fill','#d62728').attr('opacity',opacity);
-    g.append('rect').attr('x',xDep).attr('y',yo).attr('width',xArr).attr('height',bh)
-      .attr('fill','#1f77b4').attr('opacity',opacity);
+	g.append('rect').attr('x',0).attr('y',yo).attr('width',xDep).attr('height',bh)
+	  .attr('fill','#d62728').attr('opacity',opacity);
+	g.append('rect').attr('x',xDep).attr('y',yo).attr('width',xArr).attr('height',bh)
+	  .attr('fill','#1f77b4').attr('opacity',opacity);
 
-    if(isSelected){
-      g.append('rect').attr('x',-1).attr('y',yo-1).attr('width',w+2).attr('height',bh+2)
-        .attr('fill','none').attr('stroke','#2f5d8c').attr('stroke-width',2);
-    }
+	if(isSelected){
+	  g.append('rect').attr('x',-1).attr('y',yo-1).attr('width',w+2).attr('height',bh+2)
+		.attr('fill','none').attr('stroke','#2f5d8c').attr('stroke-width',2);
+	}
 
-    // invisible click target
-    g.append('rect').attr('x',0).attr('y',yo).attr('width',w).attr('height',bh)
-      .attr('fill','transparent').style('cursor','pointer')
-      .on('mouseover',ev=>showTip(
-        `Employer ${d.id}<br>Departed: ${d.departed} | Arrived: ${d.arrived}<br>`+
-        `Stable: ${d.stable} | Rate: ${(d.rate*100).toFixed(1)}%`,ev))
-      .on('mouseout',hideTip)
-      .on('click',()=>selectEmployer(d.id));
+	// invisible click target
+	g.append('rect').attr('x',0).attr('y',yo).attr('width',w).attr('height',bh)
+	  .attr('fill','transparent').style('cursor','pointer')
+	  .on('mouseover',ev=>showTip(
+		`Employer ${d.id}<br>Departed: ${d.departed} | Arrived: ${d.arrived}<br>`+
+		`Stable: ${d.stable} | Rate: ${(d.rate*100).toFixed(1)}%`,ev))
+	  .on('mouseout',hideTip)
+	  .on('click',()=>selectEmployer(d.id));
   });
 
   g.append('g').call(d3.axisLeft(y).tickFormat(d=>`Emp ${d}`).tickSize(0))
-    .call(ax=>{ax.select('.domain').remove();ax.selectAll('text').attr('font-size',9);});
+	.call(ax=>{ax.select('.domain').remove();ax.selectAll('text').attr('font-size',9);});
   g.append('g').attr('transform',`translate(0,${records.length*barH})`)
-    .call(d3.axisBottom(x).ticks(4));
+	.call(d3.axisBottom(x).ticks(4));
 
   // legend
   const leg = g.append('g').attr('transform',`translate(${w+4},4)`);
   [['#d62728','Departed'],['#1f77b4','Arrived']].forEach(([c,n],i)=>{
-    leg.append('rect').attr('x',0).attr('y',i*14).attr('width',10).attr('height',10).attr('fill',c);
-    leg.append('text').attr('x',13).attr('y',i*14+9).attr('font-size',9).text(n);
+	leg.append('rect').attr('x',0).attr('y',i*14).attr('width',10).attr('height',10).attr('fill',c);
+	leg.append('text').attr('x',13).attr('y',i*14+9).attr('font-size',9).text(n);
   });
 }
 
@@ -3441,53 +3538,53 @@ function drawSmallMultiples(){
   if(!panels.length) return;
 
   panels.forEach(panel=>{
-    const div = document.createElement('div');
-    div.className='sm-panel';
-    div.dataset.empid = panel.id;
-    div.addEventListener('click',()=>selectEmployer(panel.id));
+	const div = document.createElement('div');
+	div.className='sm-panel';
+	div.dataset.empid = panel.id;
+	div.addEventListener('click',()=>selectEmployer(panel.id));
 
-    const titleDiv = document.createElement('div');
-    titleDiv.className='sm-title';
-    titleDiv.textContent=`Employer ${panel.id}`;
-    div.appendChild(titleDiv);
+	const titleDiv = document.createElement('div');
+	titleDiv.className='sm-title';
+	titleDiv.textContent=`Employer ${panel.id}`;
+	div.appendChild(titleDiv);
 
-    const subDiv = document.createElement('div');
-    subDiv.className='sm-sub';
-    subDiv.textContent=`Total: ${panel.total.toLocaleString()} check-ins`;
-    div.appendChild(subDiv);
+	const subDiv = document.createElement('div');
+	subDiv.className='sm-sub';
+	subDiv.textContent=`Total: ${panel.total.toLocaleString()} check-ins`;
+	div.appendChild(subDiv);
 
-    const W=160, H=60, m={top:2,right:4,bottom:14,left:18};
-    const w=W-m.left-m.right, h=H-m.top-m.bottom;
-    const svg = d3.create('svg').attr('width',W).attr('height',H);
-    const g   = svg.append('g').attr('transform',`translate(${m.left},${m.top})`);
+	const W=160, H=60, m={top:2,right:4,bottom:14,left:18};
+	const w=W-m.left-m.right, h=H-m.top-m.bottom;
+	const svg = d3.create('svg').attr('width',W).attr('height',H);
+	const g   = svg.append('g').attr('transform',`translate(${m.left},${m.top})`);
 
-    const x = d3.scalePoint().domain(months).range([0,w]);
-    const y = d3.scaleLinear().domain([0,d3.max(panel.values)||1]).nice().range([h,0]);
-    const ln= d3.line().x((_,i)=>x(months[i])).y(d=>y(d)).curve(d3.curveMonotoneX);
+	const x = d3.scalePoint().domain(months).range([0,w]);
+	const y = d3.scaleLinear().domain([0,d3.max(panel.values)||1]).nice().range([h,0]);
+	const ln= d3.line().x((_,i)=>x(months[i])).y(d=>y(d)).curve(d3.curveMonotoneX);
 
-    g.append('g').attr('transform',`translate(0,${h})`)
-      .call(d3.axisBottom(x).tickValues(months.filter((_,i)=>i%6===0))
-        .tickSize(2).tickFormat(d=>d.slice(5)))
-      .call(ax=>{ax.select('.domain').remove();ax.selectAll('text').attr('font-size',7);});
-    g.append('g').call(d3.axisLeft(y).ticks(2))
-      .call(ax=>{ax.select('.domain').remove();ax.selectAll('text').attr('font-size',7);});
+	g.append('g').attr('transform',`translate(0,${h})`)
+	  .call(d3.axisBottom(x).tickValues(months.filter((_,i)=>i%6===0))
+		.tickSize(2).tickFormat(d=>d.slice(5)))
+	  .call(ax=>{ax.select('.domain').remove();ax.selectAll('text').attr('font-size',7);});
+	g.append('g').call(d3.axisLeft(y).ticks(2))
+	  .call(ax=>{ax.select('.domain').remove();ax.selectAll('text').attr('font-size',7);});
 
-    g.append('path').datum(panel.values).attr('fill','none')
-      .attr('stroke','#1f77b4').attr('stroke-width',1.2).attr('d',ln);
+	g.append('path').datum(panel.values).attr('fill','none')
+	  .attr('stroke','#1f77b4').attr('stroke-width',1.2).attr('d',ln);
 
-    div.appendChild(svg.node());
-    container.appendChild(div);
+	div.appendChild(svg.node());
+	container.appendChild(div);
   });
 }
 
 function highlightSmall(){
   document.querySelectorAll('.sm-panel').forEach(el=>{
-    const id = parseInt(el.dataset.empid);
-    el.style.border   = selectedEmp===id ? '2px solid #2f5d8c' : '1px solid #eee';
-    el.style.opacity  = !selectedEmp||selectedEmp===id ? '1' : '0.35';
-    el.querySelector('.sm-title').style.color = selectedEmp===id?'#2f5d8c':'#333';
-    const pathEl = el.querySelector('path');
-    if(pathEl) pathEl.setAttribute('stroke', selectedEmp===id?'#2f5d8c':'#1f77b4');
+	const id = parseInt(el.dataset.empid);
+	el.style.border   = selectedEmp===id ? '2px solid #2f5d8c' : '1px solid #eee';
+	el.style.opacity  = !selectedEmp||selectedEmp===id ? '1' : '0.35';
+	el.querySelector('.sm-title').style.color = selectedEmp===id?'#2f5d8c':'#333';
+	const pathEl = el.querySelector('path');
+	if(pathEl) pathEl.setAttribute('stroke', selectedEmp===id?'#2f5d8c':'#1f77b4');
   });
 }
 
@@ -3509,27 +3606,27 @@ function highlightSmall(){
   const ln  = (ysc) => d3.line().x((_,i)=>x(months[i])).y(d=>ysc(d)).curve(d3.curveMonotoneX);
 
   g.append('g').attr('transform',`translate(0,${h})`)
-    .call(d3.axisBottom(x).tickValues(months.filter((_,i)=>i%4===0)).tickSize(-h))
-    .call(ax=>{ax.selectAll('.tick line').attr('stroke','#eee');ax.select('.domain').remove();})
-    .selectAll('text').attr('transform','rotate(-30)').attr('text-anchor','end').attr('font-size',9);
+	.call(d3.axisBottom(x).tickValues(months.filter((_,i)=>i%4===0)).tickSize(-h))
+	.call(ax=>{ax.selectAll('.tick line').attr('stroke','#eee');ax.select('.domain').remove();})
+	.selectAll('text').attr('transform','rotate(-30)').attr('text-anchor','end').attr('font-size',9);
 
   g.append('g').call(d3.axisLeft(yL).ticks(5)).selectAll('text').attr('fill',series[0].color);
   g.append('g').attr('transform',`translate(${w},0)`)
-    .call(d3.axisRight(yR).ticks(5).tickFormat(d=>'$'+d3.format('.0f')(d)))
-    .selectAll('text').attr('fill',series[1].color);
+	.call(d3.axisRight(yR).ticks(5).tickFormat(d=>'$'+d3.format('.0f')(d)))
+	.selectAll('text').attr('fill',series[1].color);
 
   series.forEach((s,i)=>{
-    const ysc = i===0?yL:yR;
-    g.append('path').datum(s.values).attr('fill','none')
-      .attr('stroke',s.color).attr('stroke-width',2).attr('d',ln(ysc));
-    g.append('text').attr('x',x(months[months.length-1])+4)
-      .attr('y',ysc(s.values[s.values.length-1]))
-      .attr('fill',s.color).attr('font-size',9).attr('dominant-baseline','middle')
-      .text(i===0?'Workers':'Wage');
+	const ysc = i===0?yL:yR;
+	g.append('path').datum(s.values).attr('fill','none')
+	  .attr('stroke',s.color).attr('stroke-width',2).attr('d',ln(ysc));
+	g.append('text').attr('x',x(months[months.length-1])+4)
+	  .attr('y',ysc(s.values[s.values.length-1]))
+	  .attr('fill',s.color).attr('font-size',9).attr('dominant-baseline','middle')
+	  .text(i===0?'Workers':'Wage');
   });
 })();
 
-// ── Sankey ───────────────────────────────────────────────────────────────
+// ── Sankey diagram ───────────────────────────────────────────────────────
 (function drawSankey(){
   const {nodes, links} = DATA.sankey;
   if(!nodes.length||!links.length) return;
@@ -3539,50 +3636,211 @@ function highlightSmall(){
   const w = W-m.left-m.right, h = H-m.top-m.bottom;
 
   const layout = d3.sankey()
-    .nodeId(d=>d.id).nodeWidth(14).nodePadding(14)
-    .extent([[0,0],[w,h]]);
+	.nodeId(d=>d.id).nodeWidth(14).nodePadding(14)
+	.extent([[0,0],[w,h]]);
 
   const {nodes:sn, links:sl} = layout({
-    nodes: nodes.map(d=>({...d})),
-    links: links.map(d=>({...d})),
+	nodes: nodes.map(d=>({...d})),
+	links: links.map(d=>({...d})),
   });
 
   const color = d3.scaleOrdinal()
-    .domain(['Low','HighSchoolOrCollege','Bachelors','Graduate'])
-    .range(['#e41a1c','#ff7f00','#4daf4a','#377eb8']);
+	.domain(['Low','HighSchoolOrCollege','Bachelors','Graduate'])
+	.range(['#e41a1c','#ff7f00','#4daf4a','#377eb8']);
   const nodeColor = d=>color(d.name.replace(/ \(.*\)/,''));
 
   const svg = d3.select(el).append('svg').attr('width',W).attr('height',H);
   const g   = svg.append('g').attr('transform',`translate(${m.left},${m.top})`);
 
   g.selectAll('path').data(sl).join('path')
-    .attr('d',d3.sankeyLinkHorizontal())
-    .attr('fill','none')
-    .attr('stroke',d=>nodeColor(d.source))
-    .attr('stroke-width',d=>Math.max(1,d.width))
-    .attr('opacity',0.38)
-    .on('mouseover',(ev,d)=>showTip(`${d.source.name} → ${d.target.name}<br>Count: ${d.value}`,ev))
-    .on('mouseout',hideTip);
+	.attr('d',d3.sankeyLinkHorizontal())
+	.attr('fill','none')
+	.attr('stroke',d=>nodeColor(d.source))
+	.attr('stroke-width',d=>Math.max(1,d.width))
+	.attr('opacity',0.38)
+	.on('mouseover',(ev,d)=>showTip(`${d.source.name} → ${d.target.name}<br>Count: ${d.value}`,ev))
+	.on('mouseout',hideTip);
 
   g.selectAll('rect').data(sn).join('rect')
-    .attr('x',d=>d.x0).attr('y',d=>d.y0)
-    .attr('width',d=>d.x1-d.x0).attr('height',d=>Math.max(1,d.y1-d.y0))
-    .attr('fill',nodeColor).attr('opacity',0.9)
-    .on('mouseover',(ev,d)=>showTip(`${d.name}<br>Flow: ${d.value}`,ev))
-    .on('mouseout',hideTip);
+	.attr('x',d=>d.x0).attr('y',d=>d.y0)
+	.attr('width',d=>d.x1-d.x0).attr('height',d=>Math.max(1,d.y1-d.y0))
+	.attr('fill',nodeColor).attr('opacity',0.9)
+	.on('mouseover',(ev,d)=>showTip(`${d.name}<br>Flow: ${d.value}`,ev))
+	.on('mouseout',hideTip);
 
   g.selectAll('text').data(sn).join('text')
-    .attr('x',d=>d.x0<w/2?d.x1+5:d.x0-5)
-    .attr('y',d=>(d.y0+d.y1)/2)
-    .attr('dy','0.35em')
-    .attr('text-anchor',d=>d.x0<w/2?'start':'end')
-    .attr('font-size',10)
-    .text(d=>`${d.name.replace(/ \(.*\)/,'')} (${d.value})`);
+	.attr('x',d=>d.x0<w/2?d.x1+5:d.x0-5)
+	.attr('y',d=>(d.y0+d.y1)/2)
+	.attr('dy','0.35em')
+	.attr('text-anchor',d=>d.x0<w/2?'start':'end')
+	.attr('font-size',10)
+	.text(d=>`${d.name.replace(/ \(.*\)/,'')} (${d.value})`);
+})();
+// ── Force-directed graph for job transitions between employers ──────────────────
+(function drawForceGraph(){
+	const el = document.getElementById('ch-chord');
+	if(!el) return;
+
+	fetch('http://localhost:5000/api/job_transitions')
+		.then(res => res.json())
+		.then(data => {
+			if(!data || !data.nodes || !data.links || !data.nodes.length) {
+				el.innerHTML = '<p style="font-size:12px;color:#aaa;padding:20px">No job transition data available.</p>';
+				return;
+			}
+
+			const W = el.clientWidth || 420, H = 420;
+			
+			const svg = d3.select(el).append('svg').attr('width', W).attr('height', H);
+			
+			// Add zoom behavior
+			const g = svg.append('g');
+			const zoom = d3.zoom().on('zoom', (event) => {
+				g.attr('transform', event.transform);
+			});
+			svg.call(zoom);
+
+			// Find max link value for scaling
+			const maxLinkValue = Math.max(...data.links.map(d => d.value));
+
+			// Create simulation
+			const simulation = d3.forceSimulation(data.nodes)
+				.force('link', d3.forceLink(data.links)
+					.id(d => d.id)
+					.distance(d => 200 - (d.value / maxLinkValue) * 80)
+					.strength(d => 0.3))
+				.force('charge', d3.forceManyBody().strength(-800))
+				.force('center', d3.forceCenter(W / 2, H / 2).strength(0.1))
+				.force('collision', d3.forceCollide().radius(d => 50));
+
+			// Draw links (initially hidden)
+			const links = g.selectAll('line').data(data.links).join('line')
+				.attr('stroke', '#999')
+				.attr('stroke-opacity', 0)
+				.attr('stroke-width', d => Math.sqrt(d.value) * 1.5)
+				.attr('class', d => `link link-${d.source.id} link-${d.target.id}`)
+				.on('mouseover', (ev, d) => showTip(
+					`${data.nodes.find(n => n.id == d.source.id).name} ↔ ${data.nodes.find(n => n.id == d.target.id).name}<br>Transitions: ${d.value}`, ev))
+				.on('mouseout', hideTip);
+
+			// Draw nodes
+			const nodes = g.selectAll('circle').data(data.nodes).join('circle')
+				.attr('r', 20)
+				.attr('fill', (d, i) => d3.schemeTableau10[i % 10])
+				.attr('stroke', '#fff')
+				.attr('stroke-width', 2)
+				.attr('class', d => `node node-${d.id}`)
+				.attr('cursor', 'pointer')
+				.on('mouseover', function(ev, d) {
+					showTip(`${d.name}`, ev);
+					d3.select(this).attr('r', 25).attr('stroke-width', 3);
+					// Show connected links on hover
+					links.attr('stroke-opacity', l => (l.source.id === d.id || l.target.id === d.id) ? 0.6 : 0);
+				})
+				.on('mouseout', function(ev, d) {
+					hideTip();
+					d3.select(this).attr('r', 20).attr('stroke-width', 2);
+					// Hide links unless node is selected
+					const selectedNode = g.selectAll('circle.selected').data()[0];
+					links.attr('stroke-opacity', l => (selectedNode && (l.source.id === selectedNode.id || l.target.id === selectedNode.id)) ? 0.6 : 0);
+				})
+				.on('click', function(ev, d) {
+					ev.stopPropagation();
+					const isSelected = d3.select(this).classed('selected');
+					g.selectAll('circle').classed('selected', false).attr('stroke-width', 2);
+					
+					if(isSelected) {
+						// Deselect
+						links.attr('stroke-opacity', 0);
+					} else {
+						// Select this node
+						d3.select(this).classed('selected', true).attr('stroke-width', 3);
+						// Show its connections
+						links.attr('stroke-opacity', l => (l.source.id === d.id || l.target.id === d.id) ? 0.6 : 0);
+					}
+				});
+
+			// Add brush selection
+			const brush = d3.brush()
+				.on('end', (event) => {
+					if(!event.selection) return;
+					const [[x0, y0], [x1, y1]] = event.selection;
+					const selectedNodes = data.nodes.filter(d => 
+						d.x >= x0 && d.x <= x1 && d.y >= y0 && d.y <= y1
+					);
+					
+					if(selectedNodes.length > 0) {
+						const selectedIds = new Set(selectedNodes.map(n => n.id));
+						g.selectAll('circle').classed('selected', false).attr('stroke-width', 2);
+						selectedNodes.forEach(n => {
+							g.select(`.node-${n.id}`).classed('selected', true).attr('stroke-width', 3);
+						});
+						// Show links between/to selected nodes
+						links.attr('stroke-opacity', l => (selectedIds.has(l.source.id) || selectedIds.has(l.target.id)) ? 0.6 : 0);
+					}
+					svg.call(brush.move, null); // Clear selection rectangle
+				});
+			
+			g.append('g').call(brush);
+
+			// Click elsewhere to deselect
+			svg.on('click', () => {
+				g.selectAll('circle').classed('selected', false).attr('stroke-width', 2);
+				links.attr('stroke-opacity', 0);
+			});
+
+			// Enable dragging
+			nodes.call(d3.drag()
+				.on('start', (event, d) => {
+					if (!event.active) simulation.alphaTarget(0.3).restart();
+					d.fx = d.x;
+					d.fy = d.y;
+				})
+				.on('drag', (event, d) => {
+					d.fx = event.x;
+					d.fy = event.y;
+				})
+				.on('end', (event, d) => {
+					if (!event.active) simulation.alphaTarget(0);
+					d.fx = null;
+					d.fy = null;
+				}));
+
+			// Draw labels
+			const labels = g.selectAll('text').data(data.nodes).join('text')
+				.attr('text-anchor', 'middle')
+				.attr('dy', '0.35em')
+				.attr('font-size', 10)
+				.attr('fill', '#333')
+				.attr('pointer-events', 'none')
+				.text(d => d.name);
+
+			// Update positions on simulation tick
+			simulation.on('tick', () => {
+				links
+					.attr('x1', d => d.source.x)
+					.attr('y1', d => d.source.y)
+					.attr('x2', d => d.target.x)
+					.attr('y2', d => d.target.y);
+
+				nodes
+					.attr('cx', d => d.x)
+					.attr('cy', d => d.y);
+
+				labels
+					.attr('x', d => d.x)
+					.attr('y', d => d.y);
+			});
+		})
+		.catch(err => {
+			el.innerHTML = `<p style="font-size:12px;color:#aaa;padding:20px">Error loading data: ${err.message}</p>`;
+		});
 })();
 
 // initial draw
 drawRanking();
 drawSmallMultiples();
+highlightSmall();
 </script>
 </body></html>"""
 
