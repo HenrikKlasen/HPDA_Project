@@ -1,9 +1,11 @@
 import BuildingsMap from '../components/maps/BuildingsMap';
 import React, { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 
 function MapExplorerPage() {
   const [selectedEmployer, setSelectedEmployer] = useState(null);
   const [employers, setEmployers] = useState([]);
+  const navigate = useNavigate();
 
   useEffect(() => {
     let data = localStorage.getItem('employers');
@@ -96,6 +98,22 @@ function MapExplorerPage() {
                   <strong>{value || '—'}</strong>
                 </div>
               ))}
+              {/* Button to open EmployerDetailPage */}
+              <div style={{ marginTop: '12px' }}>
+                {(() => {
+                  const empId = selectedEmployer.id ?? selectedEmployer.employerId ?? selectedEmployer.employer_id;
+                  return empId ? (
+                    <button
+                      type="button"
+                      className="map-chip active"
+                      onClick={() => navigate(`/employer/${empId}`)}
+                      title="Open employer details"
+                    >
+                      Open detailed info
+                    </button>
+                  ) : null;
+                })()}
+              </div>
             </>
           ) : (
             <div className="chart-placeholder" style={{ marginTop: '18px', minHeight: '160px' }}>

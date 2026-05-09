@@ -1,5 +1,6 @@
 import * as d3 from 'd3';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 
 const CATEGORY_COLORS = {
   Employer: '#0051ffff',
@@ -43,6 +44,16 @@ const PIN_STYLES = `
     transform-origin: center;
     animation: pinPing 1.6s ease-in-out infinite;
   }
+
+  /* Deactivated building appearance: show as gray and subdued */
+  .building-deactivated {
+    fill: #9ca3af !important;       /* neutral gray */
+    stroke: #6b7280 !important;     /* muted stroke */
+    stroke-width: 0.8 !important;
+    opacity: 0.65 !important;
+    transition: all 0.15s ease !important;
+    pointer-events: none !important; /* optionally non-interactive */
+  }
 `;
 
 function BuildingsMap({ onEmployerSelect, transitionData, isEmploymentNetworkMap = false, hideFilters = false, employers = [], colorblindMode: colorblindModeProp, onColorblindToggle }) {
@@ -60,6 +71,7 @@ function BuildingsMap({ onEmployerSelect, transitionData, isEmploymentNetworkMap
   const [internalColorblindMode, setInternalColorblindMode] = useState(false);
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
   const [zoomLevel, setZoomLevel] = useState(1);
+  const navigate = useNavigate();
 
   // Color palettes for edge direction
   const colorPalettes = {
@@ -117,7 +129,7 @@ function BuildingsMap({ onEmployerSelect, transitionData, isEmploymentNetworkMap
   // Calculate point radius based on zoom level and health score
   const getPointRadius = (point) => {
     // We want the ON-SCREEN total width (2*radius + stroke) to be constant
-    // Compute desired screen width (px) based on prosperity, then convert to data units by dividing by zoom
+    // Compute desired screen width (px) based on prosperity, then convert to data units by dividing with zoom
     if (point.category !== 'Employer') {
       const desiredScreenTotal = 8; // px for non-employers
       const strokeScreen = 1.2; // px desired screen stroke
@@ -234,7 +246,8 @@ function resetZoom() {
 }
 
   const filteredBuildings = useMemo(
-    () => buildings.filter((building) => enabledTypes[building.type]),
+    // () => buildings.filter((building) => enabledTypes[building.type]),
+    () => buildings,
     [buildings, enabledTypes]
   );
 
@@ -543,24 +556,27 @@ function resetZoom() {
                   .map((coord, i) => `${i === 0 ? 'M' : 'L'} ${x(coord[0])} ${y(coord[1])}`)
                   .join(' ');
                 const isActive = activeBuilding?.id === building.id;
+                const isEnabled = !!enabledTypes[building.type];
                 return (
                   <path
                     key={`building-${building.id}`}
                     d={pathData}
                     fill={typeColors[building.type]}
+                    className={isEnabled ? undefined : 'building-deactivated'}
                     stroke={isActive ? '#ffffff' : '#1f2937'}
                     strokeWidth={isActive ? '2' : '0.8'}
                     opacity={isActive ? 0.9 : 0.6}
-                    style={{ cursor: 'pointer', transition: 'all 0.2s ease', pointerEvents: 'auto' }}
-                    onMouseEnter={() => setActiveBuilding(building)}
+                    style={{ cursor: isEnabled ? 'pointer' : 'default', transition: 'all 0.2s ease', pointerEvents: 'auto' }}
+                    onMouseEnter={() => { if (isEnabled) setActiveBuilding(building); }}
                     onMouseMove={(e) => {
+                      if (!isEnabled) return;
                       const rect = e.currentTarget.closest('.chart-wrap').getBoundingClientRect();
                       setTooltipPos({
                         x: e.clientX - rect.left + 10,
                         y: e.clientY - rect.top + 10,
                       });
                     }}
-                    onMouseLeave={() => setActiveBuilding(null)}
+                    onMouseLeave={() => { if (isEnabled) setActiveBuilding(null); }}
                   />
                 );
               })}
@@ -650,7 +666,7 @@ function resetZoom() {
                 position: 'absolute',
                 left: `${tooltipPos.x}px`,
                 top: `${tooltipPos.y}px`,
-                pointerEvents: 'none',
+                pointerEvents: 'auto',
               }}
             >
               {activeBuilding && (
@@ -669,6 +685,19 @@ function resetZoom() {
                   <span>
                     ({activePoint.x.toFixed(1)}, {activePoint.y.toFixed(1)})
                   </span>
+                  {activePoint.category === 'Employer' && (
+                    <div style={{ marginTop: '0.4rem' }}>
+                      <button
+                        type="button"
+                        className="map-chip active"
+                        onClick={() => navigate(`/employer/${activePoint.id}`)}
+                        title="Open employer details"
+                        style={{ pointerEvents: 'auto' }}
+                      >
+                        View details
+                      </button>
+                    </div>
+                  )}
                 </>
               )}
             </div>
