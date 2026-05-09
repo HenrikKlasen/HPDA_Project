@@ -1,5 +1,7 @@
 import * as d3 from 'd3';
 import { useEffect, useMemo, useState } from 'react';
+import LoadingSpinner from '../common/LoadingSpinner';
+import ErrorState from '../common/ErrorState';
 
 const CATEGORY_COLORS = {
   Employer: '#2563eb',
@@ -123,8 +125,8 @@ function CityPointsMap() {
         ))}
       </div>
 
-      {loading && <p>Loading map data...</p>}
-      {error && <p>{error}</p>}
+      {loading && <LoadingSpinner size="medium" message="Loading map data..." />}
+      {error && <ErrorState message={error} showRetry={false} />}
 
       {!loading && !error && (
         <div className="chart-wrap" style={{ position: 'relative' }}>

@@ -1,12 +1,14 @@
-import * as d3 from 'd3';
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import * as d3 from "d3";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import LoadingSpinner from "../common/LoadingSpinner";
+import ErrorState from "../common/ErrorState";
 
 const CATEGORY_COLORS = {
-  Employer: '#0051ffff',
-  Restaurant: '#ff0000ff',
-  Pub: '#f50bcaff',
-  School: '#f59e0b',
+  Employer: "#0051ffff",
+  Restaurant: "#ff0000ff",
+  Pub: "#f50bcaff",
+  School: "#f59e0b",
 };
 
 // Animated pin styles
@@ -56,14 +58,22 @@ const PIN_STYLES = `
   }
 `;
 
-function BuildingsMap({ onEmployerSelect, transitionData, isEmploymentNetworkMap = false, hideFilters = false, employers = [], colorblindMode: colorblindModeProp, onColorblindToggle }) {
+function BuildingsMap({
+  onEmployerSelect,
+  transitionData,
+  isEmploymentNetworkMap = false,
+  hideFilters = false,
+  employers = [],
+  colorblindMode: colorblindModeProp,
+  onColorblindToggle,
+}) {
   const svgRef = useRef(null);
   const groupRef = useRef(null);
   const zoomBehaviorRef = useRef(null);
   const [buildings, setBuildings] = useState([]);
   const [points, setPoints] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+  const [error, setError] = useState("");
   const [activeBuilding, setActiveBuilding] = useState(null);
   const [activePoint, setActivePoint] = useState(null);
   const [selectedEmployerId, setSelectedEmployerId] = useState(null);
@@ -76,16 +86,21 @@ function BuildingsMap({ onEmployerSelect, transitionData, isEmploymentNetworkMap
   // Color palettes for edge direction
   const colorPalettes = {
     normal: {
-      incoming: '#22c55e', // green
-      outgoing: '#ef4444', // red
+      incoming: "#22c55e", // green
+      outgoing: "#ef4444", // red
     },
     colorblind: {
-      incoming: '#0ea5e9', // blue
-      outgoing: '#f97316', // orange
+      incoming: "#0ea5e9", // blue
+      outgoing: "#f97316", // orange
     },
   };
-  const colorblindMode = colorblindModeProp !== undefined ? colorblindModeProp : internalColorblindMode;
-  const palette = colorblindMode ? colorPalettes.colorblind : colorPalettes.normal;
+  const colorblindMode =
+    colorblindModeProp !== undefined
+      ? colorblindModeProp
+      : internalColorblindMode;
+  const palette = colorblindMode
+    ? colorPalettes.colorblind
+    : colorPalettes.normal;
 
   const toggleColorblind = () => {
     if (onColorblindToggle) onColorblindToggle(!colorblindMode);
@@ -94,15 +109,15 @@ function BuildingsMap({ onEmployerSelect, transitionData, isEmploymentNetworkMap
 
   // Get edge color based on direction relative to selected employer
   const getEdgeColor = (link, selectedId) => {
-    if (!selectedId) return '#999';
+    if (!selectedId) return "#999";
     if (link.source === selectedId) return palette.outgoing; // edge going out
     if (link.target === selectedId) return palette.incoming; // edge coming in
-    return '#999';
+    return "#999";
   };
 
   // Detect if there's a bidirectional edge
   const hasBidirectionalEdge = (links, source, target) => {
-    return links.some(l => l.source === target && l.target === source);
+    return links.some((l) => l.source === target && l.target === source);
   };
 
   // Generate curved path for bidirectional edges
@@ -113,8 +128,8 @@ function BuildingsMap({ onEmployerSelect, transitionData, isEmploymentNetworkMap
     const dy = y2 - y1;
     const distance = Math.sqrt(dx * dx + dy * dy);
     const curveAmount = distance * 0.15 * (isCurveUp ? 1 : -1);
-    const perpX = -dy / distance * curveAmount;
-    const perpY = dx / distance * curveAmount;
+    const perpX = (-dy / distance) * curveAmount;
+    const perpY = (dx / distance) * curveAmount;
     const controlX = midX + perpX;
     const controlY = midY + perpY;
     return `M ${x1} ${y1} Q ${controlX} ${controlY} ${x2} ${y2}`;
@@ -131,7 +146,8 @@ function BuildingsMap({ onEmployerSelect, transitionData, isEmploymentNetworkMap
     }
 
     // Handle quadratic curve: M x1 y1 Q cx cy x2 y2
-    const curveMatcher = /M\s+([\d.]+)\s+([\d.]+)\s+Q\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)/;
+    const curveMatcher =
+      /M\s+([\d.]+)\s+([\d.]+)\s+Q\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)/;
     const curveMatch = pathData.match(curveMatcher);
     if (curveMatch) {
       const [, x1, y1, cx, cy, x2, y2] = curveMatch;
@@ -143,7 +159,7 @@ function BuildingsMap({ onEmployerSelect, transitionData, isEmploymentNetworkMap
 
   // Get health score for employer
   const getHealthScore = (employerId) => {
-    const employer = employers.find(e => e.employerId === employerId);
+    const employer = employers.find((e) => e.employerId === employerId);
     return employer?.health_score ?? 0.5; // default 0.5 if not found
   };
 
@@ -151,11 +167,14 @@ function BuildingsMap({ onEmployerSelect, transitionData, isEmploymentNetworkMap
   const getPointRadius = (point) => {
     // We want the ON-SCREEN total width (2*radius + stroke) to be constant
     // Compute desired screen width (px) based on prosperity, then convert to data units by dividing with zoom
-    if (point.category !== 'Employer') {
+    if (point.category !== "Employer") {
       const desiredScreenTotal = 8; // px for non-employers
       const strokeScreen = 1.2; // px desired screen stroke
       const strokeData = strokeScreen / Math.max(zoomLevel, 0.001);
-      const radiusData = Math.max(0.6, (desiredScreenTotal / Math.max(zoomLevel, 0.001) - strokeData) / 2);
+      const radiusData = Math.max(
+        0.6,
+        (desiredScreenTotal / Math.max(zoomLevel, 0.001) - strokeData) / 2,
+      );
       return radiusData;
     }
 
@@ -163,12 +182,13 @@ function BuildingsMap({ onEmployerSelect, transitionData, isEmploymentNetworkMap
     // Desired on-screen total size in pixels (larger for healthier employers)
     const baseScreen = 8; // px
     const extraPerHealth = 6; // px at health_score=1
-    const desiredScreenTotal = baseScreen + (healthScore * extraPerHealth);
+    const desiredScreenTotal = baseScreen + healthScore * extraPerHealth;
 
     const strokeScreen = 1.2; // desired screen stroke width in px when not hovered
     const strokeData = strokeScreen / Math.max(zoomLevel, 0.001);
 
-    const radiusData = (desiredScreenTotal / Math.max(zoomLevel, 0.001) - strokeData) / 2;
+    const radiusData =
+      (desiredScreenTotal / Math.max(zoomLevel, 0.001) - strokeData) / 2;
     // clamp to sensible bounds in data units
     return Math.max(0.8, Math.min(40, radiusData));
   };
@@ -190,12 +210,12 @@ function BuildingsMap({ onEmployerSelect, transitionData, isEmploymentNetworkMap
 
     async function loadData() {
       setLoading(true);
-      setError('');
+      setError("");
       try {
-        const buildingResponse = await fetch('/data/buildings.json');
+        const buildingResponse = await fetch("/data/buildings.json");
         const buildingData = await buildingResponse.json();
 
-        const pointRows = await d3.csv('/data/map_points.csv', (row) => ({
+        const pointRows = await d3.csv("/data/map_points.csv", (row) => ({
           id: row.id,
           name: row.name,
           category: row.category,
@@ -205,10 +225,14 @@ function BuildingsMap({ onEmployerSelect, transitionData, isEmploymentNetworkMap
 
         if (!ignore) {
           setBuildings(buildingData || []);
-          setPoints(pointRows.filter((row) => Number.isFinite(row.x) && Number.isFinite(row.y)));
+          setPoints(
+            pointRows.filter(
+              (row) => Number.isFinite(row.x) && Number.isFinite(row.y),
+            ),
+          );
         }
       } catch {
-        if (!ignore) setError('Unable to load map data.');
+        if (!ignore) setError("Unable to load map data.");
       } finally {
         if (!ignore) setLoading(false);
       }
@@ -221,60 +245,58 @@ function BuildingsMap({ onEmployerSelect, transitionData, isEmploymentNetworkMap
     };
   }, []);
 
-useEffect(() => {
-  if (loading) return;
-  if (!svgRef.current || !groupRef.current) return;
+  useEffect(() => {
+    if (loading) return;
+    if (!svgRef.current || !groupRef.current) return;
 
-  const svg = d3.select(svgRef.current);
-  const group = d3.select(groupRef.current);
+    const svg = d3.select(svgRef.current);
+    const group = d3.select(groupRef.current);
 
-  const zoom = d3.zoom()
-    .scaleExtent([0.5, 8])
-    .on('zoom', (event) => {
-      group.attr('transform', event.transform);
-      setZoomLevel(event.transform.k);
-    });
+    const zoom = d3
+      .zoom()
+      .scaleExtent([0.5, 8])
+      .on("zoom", (event) => {
+        group.attr("transform", event.transform);
+        setZoomLevel(event.transform.k);
+      });
 
-  zoomBehaviorRef.current = zoom;
+    zoomBehaviorRef.current = zoom;
 
-  svg.call(zoom);
+    svg.call(zoom);
 
-  return () => {
-    svg.on('.zoom', null);
-  };
-}, [loading]);
-function handleZoom(direction) {
-  if (!svgRef.current || !zoomBehaviorRef.current) return;
+    return () => {
+      svg.on(".zoom", null);
+    };
+  }, [loading]);
+  function handleZoom(direction) {
+    if (!svgRef.current || !zoomBehaviorRef.current) return;
 
-  const factor = direction === 'in' ? 1.5 : 1 / 1.5;
-  const newScale = Math.max(0.5, Math.min(8, zoomLevel * factor));
+    const factor = direction === "in" ? 1.5 : 1 / 1.5;
+    const newScale = Math.max(0.5, Math.min(8, zoomLevel * factor));
 
-  d3.select(svgRef.current)
-    .transition()
-    .duration(300)
-    .call(
-      zoomBehaviorRef.current.scaleTo,
-      newScale
-    );
-}
-function resetZoom() {
-  if (!svgRef.current || !zoomBehaviorRef.current) return;
+    d3.select(svgRef.current)
+      .transition()
+      .duration(300)
+      .call(zoomBehaviorRef.current.scaleTo, newScale);
+  }
+  function resetZoom() {
+    if (!svgRef.current || !zoomBehaviorRef.current) return;
 
-  d3.select(svgRef.current)
-    .transition()
-    .duration(300)
-    .call(zoomBehaviorRef.current.transform, d3.zoomIdentity);
-}
+    d3.select(svgRef.current)
+      .transition()
+      .duration(300)
+      .call(zoomBehaviorRef.current.transform, d3.zoomIdentity);
+  }
 
   const filteredBuildings = useMemo(
     // () => buildings.filter((building) => enabledTypes[building.type]),
     () => buildings,
-    [buildings, enabledTypes]
+    [buildings, enabledTypes],
   );
 
   const filteredPoints = useMemo(
     () => points.filter((point) => enabledCategories[point.category]),
-    [points, enabledCategories]
+    [points, enabledCategories],
   );
 
   const mapWidth = 1076;
@@ -283,8 +305,14 @@ function resetZoom() {
   const displayHeight = Math.round((displayWidth / mapWidth) * mapHeight);
 
   // Calculate data coordinate ranges from both buildings and points
-  const allX = [...buildings.flatMap((b) => b.coords.map((c) => c[0])), ...points.map((p) => p.x)];
-  const allY = [...buildings.flatMap((b) => b.coords.map((c) => c[1])), ...points.map((p) => p.y)];
+  const allX = [
+    ...buildings.flatMap((b) => b.coords.map((c) => c[0])),
+    ...points.map((p) => p.x),
+  ];
+  const allY = [
+    ...buildings.flatMap((b) => b.coords.map((c) => c[1])),
+    ...points.map((p) => p.y),
+  ];
   const xExtent = d3.extent(allX);
   const yExtent = d3.extent(allY);
 
@@ -298,16 +326,18 @@ function resetZoom() {
     .domain([yExtent[0] ?? 0, yExtent[1] ?? 1])
     .range([displayHeight, 0]);
 
-  const buildingTypes = ['Commercial', 'Residental', 'School'];
-  const typeColors = isEmploymentNetworkMap ? {
-    Commercial: '#9ca3af',
-    Residental: '#9ca3af',
-    School: '#9ca3af',
-  } : {
-    Commercial: '#3b82f6',
-    Residental: '#007850ff',
-    School: '#f59e0b',
-  };
+  const buildingTypes = ["Commercial", "Residental", "School"];
+  const typeColors = isEmploymentNetworkMap
+    ? {
+        Commercial: "#9ca3af",
+        Residental: "#9ca3af",
+        School: "#9ca3af",
+      }
+    : {
+        Commercial: "#3b82f6",
+        Residental: "#007850ff",
+        School: "#f59e0b",
+      };
 
   function toggleType(type) {
     setEnabledTypes((prev) => ({
@@ -324,68 +354,64 @@ function resetZoom() {
   }
 
   function handleZoom(direction) {
-    console.log('handleZoom called with direction:', direction);
-    console.log('groupRef.current:', groupRef.current);
-    
+    console.log("handleZoom called with direction:", direction);
+    console.log("groupRef.current:", groupRef.current);
+
     if (!groupRef.current) {
-      console.log('Early return: missing groupRef');
+      console.log("Early return: missing groupRef");
       return;
     }
-    
+
     const group = d3.select(groupRef.current);
-    const newScale = direction === 'in' ? zoomLevel * 1.5 : zoomLevel / 1.5;
+    const newScale = direction === "in" ? zoomLevel * 1.5 : zoomLevel / 1.5;
     const clampedScale = Math.max(0.5, Math.min(8, newScale));
-    
-    console.log('Current zoom level:', zoomLevel);
-    console.log('New scale (before clamp):', newScale);
-    console.log('Clamped scale:', clampedScale);
-    
+
+    console.log("Current zoom level:", zoomLevel);
+    console.log("New scale (before clamp):", newScale);
+    console.log("Clamped scale:", clampedScale);
+
     // Create new transform with the clamped scale, keeping x and y at 0
     const newTransform = d3.zoomIdentity.scale(clampedScale);
-    console.log('New transform:', newTransform);
-    
+    console.log("New transform:", newTransform);
+
     // Apply the transform to the group
-    group.transition()
-      .duration(300)
-      .attr('transform', newTransform);
-    
+    group.transition().duration(300).attr("transform", newTransform);
+
     setZoomLevel(clampedScale);
-    console.log('Transform applied, zoom level updated to:', clampedScale);
+    console.log("Transform applied, zoom level updated to:", clampedScale);
   }
 
   function resetZoom() {
-    console.log('resetZoom called');
-    console.log('groupRef.current:', groupRef.current);
-    
+    console.log("resetZoom called");
+    console.log("groupRef.current:", groupRef.current);
+
     if (!groupRef.current) {
-      console.log('Early return: missing groupRef');
+      console.log("Early return: missing groupRef");
       return;
     }
-    
+
     const group = d3.select(groupRef.current);
     const identityTransform = d3.zoomIdentity;
-    
-    console.log('Applying identity transform');
-    
-    group.transition()
-      .duration(300)
-      .attr('transform', identityTransform);
-    
+
+    console.log("Applying identity transform");
+
+    group.transition().duration(300).attr("transform", identityTransform);
+
     setZoomLevel(1);
-    console.log('Transform reset to identity, zoom level reset to 1');
+    console.log("Transform reset to identity, zoom level reset to 1");
   }
 
   const buildingCounts = {
-    Commercial: buildings.filter((b) => b.type === 'Commercial').length,
-    Residental: buildings.filter((b) => b.type === 'Residental').length,
-    School: buildings.filter((b) => b.type === 'School').length,
+    Commercial: buildings.filter((b) => b.type === "Commercial").length,
+    Residental: buildings.filter((b) => b.type === "Residental").length,
+    School: buildings.filter((b) => b.type === "School").length,
   };
 
   const pointCounts = {
-    Employer: points.filter((p) => p.category === 'Employer').length,
-    Restaurant: points.filter((p) => p.category === 'Restaurant').length,
-    Pub: points.filter((p) => p.category === 'Pub').length,
-    School: points.filter((p) => p.category === 'School').length,
+    Employer: points.filter((p) => p.category === "Employer").length,
+    Restaurant: points.filter((p) => p.category === "Restaurant").length,
+    Pub: points.filter((p) => p.category === "Pub").length,
+    School: points.filter((p) => p.category === "School").length,
   };
 
   return (
@@ -393,36 +419,65 @@ function resetZoom() {
       <div className="map-header">
         <h2 className="chart-title">Building Polygons & Locations Map</h2>
         <p className="map-subtitle">
-          {filteredBuildings.length} of {buildings.length} buildings, {filteredPoints.length} of {points.length} points visible.
+          {filteredBuildings.length} of {buildings.length} buildings,{" "}
+          {filteredPoints.length} of {points.length} points visible.
         </p>
       </div>
 
       {!hideFilters && (
-        <div className="map-filters" role="group" aria-label="Building and location filters">
-          <div style={{ marginBottom: '0.8rem' }}>
-            <p style={{ fontSize: '0.85rem', fontWeight: '600', marginBottom: '0.4rem', color: '#6b7280' }}>Buildings</p>
+        <div
+          className="map-filters"
+          role="group"
+          aria-label="Building and location filters"
+        >
+          <div style={{ marginBottom: "0.8rem" }}>
+            <p
+              style={{
+                fontSize: "0.85rem",
+                fontWeight: "600",
+                marginBottom: "0.4rem",
+                color: "#6b7280",
+              }}
+            >
+              Buildings
+            </p>
             {buildingTypes.map((type) => (
               <button
                 key={type}
                 type="button"
-                className={`map-chip${enabledTypes[type] ? ' active' : ''}`}
+                className={`map-chip${enabledTypes[type] ? " active" : ""}`}
                 onClick={() => toggleType(type)}
               >
-                <span className="map-chip-dot" style={{ background: typeColors[type] }} />
+                <span
+                  className="map-chip-dot"
+                  style={{ background: typeColors[type] }}
+                />
                 {type} ({buildingCounts[type]})
               </button>
             ))}
           </div>
           <div>
-            <p style={{ fontSize: '0.85rem', fontWeight: '600', marginBottom: '0.4rem', color: '#6b7280' }}>Locations</p>
-            {['Employer', 'Restaurant', 'Pub', 'School'].map((category) => (
+            <p
+              style={{
+                fontSize: "0.85rem",
+                fontWeight: "600",
+                marginBottom: "0.4rem",
+                color: "#6b7280",
+              }}
+            >
+              Locations
+            </p>
+            {["Employer", "Restaurant", "Pub", "School"].map((category) => (
               <button
                 key={category}
                 type="button"
-                className={`map-chip${enabledCategories[category] ? ' active' : ''}`}
+                className={`map-chip${enabledCategories[category] ? " active" : ""}`}
                 onClick={() => toggleCategory(category)}
               >
-                <span className="map-chip-dot" style={{ background: CATEGORY_COLORS[category] }} />
+                <span
+                  className="map-chip-dot"
+                  style={{ background: CATEGORY_COLORS[category] }}
+                />
                 {category} ({pointCounts[category]})
               </button>
             ))}
@@ -430,17 +485,30 @@ function resetZoom() {
         </div>
       )}
 
-      {loading && <p>Loading building data...</p>}
-      {error && <p>{error}</p>}
+      {loading && (
+        <LoadingSpinner size="medium" message="Loading map data..." />
+      )}
+      {error && <ErrorState message={error} showRetry={false} />}
 
       {!loading && !error && (
-        <div className="chart-wrap" style={{ position: 'relative', marginBottom: '1rem', width: '100%', height: '1000px', overflow: 'hidden' }}>
+        <div
+          className="chart-wrap"
+          style={{
+            position: "relative",
+            marginBottom: "1rem",
+            width: "100%",
+            height: "1000px",
+            overflow: "hidden",
+          }}
+        >
           <style>{PIN_STYLES}</style>
-          <div style={{ marginBottom: '0.5rem', display: 'flex', gap: '0.5rem' }}>
+          <div
+            style={{ marginBottom: "0.5rem", display: "flex", gap: "0.5rem" }}
+          >
             <button
               type="button"
               className="map-chip active"
-              onClick={() => handleZoom('in')}
+              onClick={() => handleZoom("in")}
               title="Zoom in"
             >
               🔍+
@@ -448,20 +516,22 @@ function resetZoom() {
             <button
               type="button"
               className="map-chip active"
-              onClick={() => handleZoom('out')}
+              onClick={() => handleZoom("out")}
               title="Zoom out"
             >
               🔍−
-            </button>            {isEmploymentNetworkMap && (
+            </button>{" "}
+            {isEmploymentNetworkMap && (
               <button
                 type="button"
-                className={`map-chip${colorblindMode ? ' active' : ''}`}
+                className={`map-chip${colorblindMode ? " active" : ""}`}
                 onClick={() => toggleColorblind()}
                 title="Toggle colorblind mode"
               >
-                {colorblindMode ? '👁️ Normal' : '🎨 Colorblind'}
+                {colorblindMode ? "👁️ Normal" : "🎨 Colorblind"}
               </button>
-            )}            <button
+            )}{" "}
+            <button
               type="button"
               className="map-chip active"
               onClick={resetZoom}
@@ -469,7 +539,14 @@ function resetZoom() {
             >
               ⟲
             </button>
-            <span style={{ marginLeft: 'auto', padding: '0.45rem 0.6rem', fontSize: '0.8rem', color: '#6b7280' }}>
+            <span
+              style={{
+                marginLeft: "auto",
+                padding: "0.45rem 0.6rem",
+                fontSize: "0.8rem",
+                color: "#6b7280",
+              }}
+            >
               Zoom: {(zoomLevel * 100).toFixed(0)}%
             </span>
           </div>
@@ -481,159 +558,275 @@ function resetZoom() {
             className="chart-svg map-svg"
             role="img"
             aria-label="Map of building polygons"
-            style={{ overflow: 'hidden', cursor: 'grab', border: '1px solid #e5e7eb', display: 'block', touchAction: 'none' }}
+            style={{
+              overflow: "hidden",
+              cursor: "grab",
+              border: "1px solid #e5e7eb",
+              display: "block",
+              touchAction: "none",
+            }}
           >
             <defs>
-              <marker id="arrowOutgoing" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+              <marker
+                id="arrowOutgoing"
+                markerWidth="10"
+                markerHeight="10"
+                refX="8"
+                refY="3"
+                orient="auto"
+              >
                 <polygon points="0 0, 10 3, 0 6" fill="${palette.outgoing}" />
               </marker>
-              <marker id="arrowIncoming" markerWidth="10" markerHeight="10" refX="2" refY="3" orient="auto-start-reverse">
+              <marker
+                id="arrowIncoming"
+                markerWidth="10"
+                markerHeight="10"
+                refX="2"
+                refY="3"
+                orient="auto-start-reverse"
+              >
                 <polygon points="0 0, 10 3, 0 6" fill="${palette.incoming}" />
               </marker>
             </defs>
             <g ref={groupRef}>
-              <rect width={displayWidth} height={displayHeight} fill="transparent" style={{ pointerEvents: 'all' }} />
+              <rect
+                width={displayWidth}
+                height={displayHeight}
+                fill="transparent"
+                style={{ pointerEvents: "all" }}
+              />
               {/* <image href="/assets/basemap.png" x="0" y="0" width={displayWidth} height={displayHeight} style={{ pointerEvents: 'all' }} /> */}
-              
+
               {/* Network layer - job transitions (if data provided) */}
-              {transitionData && transitionData.links && transitionData.links.map((link, idx) => {
-                const sourceNode = transitionData.nodes.find(n => n.id === link.source);
-                const targetNode = transitionData.nodes.find(n => n.id === link.target);
-                
-                if (!sourceNode || !targetNode) return null;
-                
-                // Match nodes with actual map points to get coordinates
-                const sourcePoint = points.find(p => p.id === String(sourceNode.id) && p.category === 'Employer');
-                const targetPoint = points.find(p => p.id === String(targetNode.id) && p.category === 'Employer');
-                
-                if (!sourcePoint || !targetPoint) return null;
-                
-                // Validate coordinates
-                if (!Number.isFinite(sourcePoint.x) || !Number.isFinite(sourcePoint.y) || 
-                    !Number.isFinite(targetPoint.x) || !Number.isFinite(targetPoint.y)) {
-                  return null;
-                }
-                
-                const selectedIdNum = selectedEmployerId ? parseInt(selectedEmployerId, 10) : null;
-                const hoveredIdNum = hoveredEmployerId ? parseInt(hoveredEmployerId, 10) : null;
-                
-                const isSelected = selectedIdNum && (link.source === selectedIdNum || link.target === selectedIdNum);
-                const isHovered = hoveredIdNum && (link.source === hoveredIdNum || link.target === hoveredIdNum);
-                
-                // Show connected edges brightly, hide all others when interacting
-                let opacity = 0.25;
-                if (hoveredIdNum || selectedIdNum) {
-                  opacity = (isHovered || isSelected) ? (isHovered ? 0.8 : 0.6) : 0;
-                }
-                
-                const strokeWidth = Math.max(1, Math.sqrt(link.value) * 2);
-                const edgeColor = selectedIdNum ? getEdgeColor(link, selectedIdNum) : '#999';
-                
-                // Check for bidirectional edge
-                const bidirectional = hasBidirectionalEdge(transitionData.links, link.source, link.target);
-                const x1 = x(sourcePoint.x);
-                const y1 = y(sourcePoint.y);
-                const x2 = x(targetPoint.x);
-                const y2 = y(targetPoint.y);
-                
-                // For bidirectional edges, curve them in opposite directions
-                const isCurveUp = link.source < link.target;
-                const pathData = bidirectional ? getCurvedPath(x1, y1, x2, y2, isCurveUp) : `M ${x1} ${y1} L ${x2} ${y2}`;
-                
-                return (
-                  <g key={`transition-${idx}`}>
-                    <path
-                      d={pathData}
-                      stroke={edgeColor}
-                      strokeWidth={strokeWidth}
-                      fill="none"
-                      opacity={opacity}
-                      style={{ pointerEvents: 'none', transition: 'opacity 0.15s ease, stroke 0.15s ease' }}
-                    />
-                    {/* Animated arrows on selected edges */}
-                    {selectedIdNum && opacity > 0 && (
-                      <>
-                        {link.source === selectedIdNum && (
-                          /* Outgoing edge arrow - moves away from source */
-                          <circle cx="0" cy="0" r="3" fill={palette.outgoing} opacity={opacity} style={{ pointerEvents: 'none' }}>
-                            <animateMotion dur="1.5s" repeatCount="indefinite">
-                              <mpath xlinkHref={`#path-${idx}`} />
-                            </animateMotion>
-                          </circle>
-                        )}
-                        {link.target === selectedIdNum && (
-                          /* Incoming edge arrow - moves toward target (opposite direction) */
-                          <circle cx="0" cy="0" r="3" fill={palette.incoming} opacity={opacity} style={{ pointerEvents: 'none' }}>
-                            <animateMotion dur="1.5s" repeatCount="indefinite">
-                              <mpath xlinkHref={`#path-reverse-${idx}`} />
-                            </animateMotion>
-                          </circle>
-                        )}
-                      </>
-                    )}
-                    {/* Reference paths for animation */}
-                    {selectedIdNum && (
-                      <>
-                        <path id={`path-${idx}`} d={pathData} style={{ display: 'none' }} />
-                        {link.target === selectedIdNum && (
-                          <path id={`path-reverse-${idx}`} d={reversePath(pathData)} style={{ display: 'none' }} />
-                        )}
-                      </>
-                    )}
-                  </g>
-                );
-              })}
+              {transitionData &&
+                transitionData.links &&
+                transitionData.links.map((link, idx) => {
+                  const sourceNode = transitionData.nodes.find(
+                    (n) => n.id === link.source,
+                  );
+                  const targetNode = transitionData.nodes.find(
+                    (n) => n.id === link.target,
+                  );
+
+                  if (!sourceNode || !targetNode) return null;
+
+                  // Match nodes with actual map points to get coordinates
+                  const sourcePoint = points.find(
+                    (p) =>
+                      p.id === String(sourceNode.id) &&
+                      p.category === "Employer",
+                  );
+                  const targetPoint = points.find(
+                    (p) =>
+                      p.id === String(targetNode.id) &&
+                      p.category === "Employer",
+                  );
+
+                  if (!sourcePoint || !targetPoint) return null;
+
+                  // Validate coordinates
+                  if (
+                    !Number.isFinite(sourcePoint.x) ||
+                    !Number.isFinite(sourcePoint.y) ||
+                    !Number.isFinite(targetPoint.x) ||
+                    !Number.isFinite(targetPoint.y)
+                  ) {
+                    return null;
+                  }
+
+                  const selectedIdNum = selectedEmployerId
+                    ? parseInt(selectedEmployerId, 10)
+                    : null;
+                  const hoveredIdNum = hoveredEmployerId
+                    ? parseInt(hoveredEmployerId, 10)
+                    : null;
+
+                  const isSelected =
+                    selectedIdNum &&
+                    (link.source === selectedIdNum ||
+                      link.target === selectedIdNum);
+                  const isHovered =
+                    hoveredIdNum &&
+                    (link.source === hoveredIdNum ||
+                      link.target === hoveredIdNum);
+
+                  // Show connected edges brightly, hide all others when interacting
+                  let opacity = 0.25;
+                  if (hoveredIdNum || selectedIdNum) {
+                    opacity =
+                      isHovered || isSelected ? (isHovered ? 0.8 : 0.6) : 0;
+                  }
+
+                  const strokeWidth = Math.max(1, Math.sqrt(link.value) * 2);
+                  const edgeColor = selectedIdNum
+                    ? getEdgeColor(link, selectedIdNum)
+                    : "#999";
+
+                  // Check for bidirectional edge
+                  const bidirectional = hasBidirectionalEdge(
+                    transitionData.links,
+                    link.source,
+                    link.target,
+                  );
+                  const x1 = x(sourcePoint.x);
+                  const y1 = y(sourcePoint.y);
+                  const x2 = x(targetPoint.x);
+                  const y2 = y(targetPoint.y);
+
+                  // For bidirectional edges, curve them in opposite directions
+                  const isCurveUp = link.source < link.target;
+                  const pathData = bidirectional
+                    ? getCurvedPath(x1, y1, x2, y2, isCurveUp)
+                    : `M ${x1} ${y1} L ${x2} ${y2}`;
+
+                  return (
+                    <g key={`transition-${idx}`}>
+                      <path
+                        d={pathData}
+                        stroke={edgeColor}
+                        strokeWidth={strokeWidth}
+                        fill="none"
+                        opacity={opacity}
+                        style={{
+                          pointerEvents: "none",
+                          transition: "opacity 0.15s ease, stroke 0.15s ease",
+                        }}
+                      />
+                      {/* Animated arrows on selected edges */}
+                      {selectedIdNum && opacity > 0 && (
+                        <>
+                          {link.source === selectedIdNum && (
+                            /* Outgoing edge arrow - moves away from source */
+                            <circle
+                              cx="0"
+                              cy="0"
+                              r="3"
+                              fill={palette.outgoing}
+                              opacity={opacity}
+                              style={{ pointerEvents: "none" }}
+                            >
+                              <animateMotion
+                                dur="1.5s"
+                                repeatCount="indefinite"
+                              >
+                                <mpath xlinkHref={`#path-${idx}`} />
+                              </animateMotion>
+                            </circle>
+                          )}
+                          {link.target === selectedIdNum && (
+                            /* Incoming edge arrow - moves toward target (opposite direction) */
+                            <circle
+                              cx="0"
+                              cy="0"
+                              r="3"
+                              fill={palette.incoming}
+                              opacity={opacity}
+                              style={{ pointerEvents: "none" }}
+                            >
+                              <animateMotion
+                                dur="1.5s"
+                                repeatCount="indefinite"
+                              >
+                                <mpath xlinkHref={`#path-reverse-${idx}`} />
+                              </animateMotion>
+                            </circle>
+                          )}
+                        </>
+                      )}
+                      {/* Reference paths for animation */}
+                      {selectedIdNum && (
+                        <>
+                          <path
+                            id={`path-${idx}`}
+                            d={pathData}
+                            style={{ display: "none" }}
+                          />
+                          {link.target === selectedIdNum && (
+                            <path
+                              id={`path-reverse-${idx}`}
+                              d={reversePath(pathData)}
+                              style={{ display: "none" }}
+                            />
+                          )}
+                        </>
+                      )}
+                    </g>
+                  );
+                })}
 
               {/* Connection labels - show count on hover */}
-              {(selectedEmployerId || hoveredEmployerId) && transitionData && transitionData.links && transitionData.links.map((link, idx) => {
-                const selectedIdNum = selectedEmployerId ? parseInt(selectedEmployerId, 10) : null;
-                const hoveredIdNum = hoveredEmployerId ? parseInt(hoveredEmployerId, 10) : null;
-                const activeId = selectedIdNum || hoveredIdNum;
-                
-                if (link.source !== activeId && link.target !== activeId) return null;
-                
-                const sourceNode = transitionData.nodes.find(n => n.id === link.source);
-                const targetNode = transitionData.nodes.find(n => n.id === link.target);
-                
-                if (!sourceNode || !targetNode) return null;
-                
-                // Match nodes with actual map points to get coordinates
-                const sourcePoint = points.find(p => p.id === String(sourceNode.id) && p.category === 'Employer');
-                const targetPoint = points.find(p => p.id === String(targetNode.id) && p.category === 'Employer');
-                
-                if (!sourcePoint || !targetPoint) return null;
-                
-                const midX = (x(sourcePoint.x) + x(targetPoint.x)) / 2;
-                const midY = (y(sourcePoint.y) + y(targetPoint.y)) / 2;
-                
-                return (
-                  <text
-                    key={`label-${idx}`}
-                    x={midX}
-                    y={midY}
-                    textAnchor="middle"
-                    dy="0.3em"
-                    fontSize="11"
-                    fill="#333"
-                    fontWeight="bold"
-                    background="white"
-                    style={{ 
-                      pointerEvents: 'none',
-                      paint: 'white',
-                      textShadow: '0 0 3px white, 0 0 3px white',
-                      textDecoration: 'none'
-                    }}
-                  >
-                    {link.value}
-                  </text>
-                );
-              })}
+              {(selectedEmployerId || hoveredEmployerId) &&
+                transitionData &&
+                transitionData.links &&
+                transitionData.links.map((link, idx) => {
+                  const selectedIdNum = selectedEmployerId
+                    ? parseInt(selectedEmployerId, 10)
+                    : null;
+                  const hoveredIdNum = hoveredEmployerId
+                    ? parseInt(hoveredEmployerId, 10)
+                    : null;
+                  const activeId = selectedIdNum || hoveredIdNum;
+
+                  if (link.source !== activeId && link.target !== activeId)
+                    return null;
+
+                  const sourceNode = transitionData.nodes.find(
+                    (n) => n.id === link.source,
+                  );
+                  const targetNode = transitionData.nodes.find(
+                    (n) => n.id === link.target,
+                  );
+
+                  if (!sourceNode || !targetNode) return null;
+
+                  // Match nodes with actual map points to get coordinates
+                  const sourcePoint = points.find(
+                    (p) =>
+                      p.id === String(sourceNode.id) &&
+                      p.category === "Employer",
+                  );
+                  const targetPoint = points.find(
+                    (p) =>
+                      p.id === String(targetNode.id) &&
+                      p.category === "Employer",
+                  );
+
+                  if (!sourcePoint || !targetPoint) return null;
+
+                  const midX = (x(sourcePoint.x) + x(targetPoint.x)) / 2;
+                  const midY = (y(sourcePoint.y) + y(targetPoint.y)) / 2;
+
+                  return (
+                    <text
+                      key={`label-${idx}`}
+                      x={midX}
+                      y={midY}
+                      textAnchor="middle"
+                      dy="0.3em"
+                      fontSize="11"
+                      fill="#333"
+                      fontWeight="bold"
+                      background="white"
+                      style={{
+                        pointerEvents: "none",
+                        paint: "white",
+                        textShadow: "0 0 3px white, 0 0 3px white",
+                        textDecoration: "none",
+                      }}
+                    >
+                      {link.value}
+                    </text>
+                  );
+                })}
 
               {/* Interactive layer - buildings and points */}
               {filteredBuildings.map((building) => {
                 const pathData = building.coords
-                  .map((coord, i) => `${i === 0 ? 'M' : 'L'} ${x(coord[0])} ${y(coord[1])}`)
-                  .join(' ');
+                  .map(
+                    (coord, i) =>
+                      `${i === 0 ? "M" : "L"} ${x(coord[0])} ${y(coord[1])}`,
+                  )
+                  .join(" ");
                 const isActive = activeBuilding?.id === building.id;
                 const isEnabled = !!enabledTypes[building.type];
                 return (
@@ -641,99 +834,132 @@ function resetZoom() {
                     key={`building-${building.id}`}
                     d={pathData}
                     fill={typeColors[building.type]}
-                    className={isEnabled ? undefined : 'building-deactivated'}
-                    stroke={isActive ? '#ffffff' : '#1f2937'}
-                    strokeWidth={isActive ? '2' : '0.8'}
+                    className={isEnabled ? undefined : "building-deactivated"}
+                    stroke={isActive ? "#ffffff" : "#1f2937"}
+                    strokeWidth={isActive ? "2" : "0.8"}
                     opacity={isActive ? 0.9 : 0.6}
-                    style={{ cursor: isEnabled ? 'pointer' : 'default', transition: 'all 0.2s ease', pointerEvents: 'auto' }}
-                    onMouseEnter={() => { if (isEnabled) setActiveBuilding(building); }}
+                    style={{
+                      cursor: isEnabled ? "pointer" : "default",
+                      transition: "all 0.2s ease",
+                      pointerEvents: "auto",
+                    }}
+                    onMouseEnter={() => {
+                      if (isEnabled) setActiveBuilding(building);
+                    }}
                     onMouseMove={(e) => {
                       if (!isEnabled) return;
-                      const rect = e.currentTarget.closest('.chart-wrap').getBoundingClientRect();
+                      const rect = e.currentTarget
+                        .closest(".chart-wrap")
+                        .getBoundingClientRect();
                       setTooltipPos({
                         x: e.clientX - rect.left + 10,
                         y: e.clientY - rect.top + 10,
                       });
                     }}
-                    onMouseLeave={() => { if (isEnabled) setActiveBuilding(null); }}
+                    onMouseLeave={() => {
+                      if (isEnabled) setActiveBuilding(null);
+                    }}
                   />
                 );
               })}
 
               {filteredPoints.map((point) => {
                 const baseRadius = getPointRadius(point);
-                const isActive = activePoint?.id === point.id && activePoint?.category === point.category;
-                const isHoveredOrSelected = hoveredEmployerId === point.id || selectedEmployerId === point.id;
-                const displayRadius = isActive ? baseRadius + 2 : isHoveredOrSelected ? baseRadius + 1 : baseRadius;
-                
+                const isActive =
+                  activePoint?.id === point.id &&
+                  activePoint?.category === point.category;
+                const isHoveredOrSelected =
+                  hoveredEmployerId === point.id ||
+                  selectedEmployerId === point.id;
+                const displayRadius = isActive
+                  ? baseRadius + 2
+                  : isHoveredOrSelected
+                    ? baseRadius + 1
+                    : baseRadius;
+
                 return (
-                <circle
-                  key={`${point.category}-${point.id}`}
-                  cx={x(point.x)}
-                  cy={y(point.y)}
-                  r={displayRadius}
-                  fill={CATEGORY_COLORS[point.category]}
-                  fillOpacity={isHoveredOrSelected ? 1 : 0.88}
-                  stroke={isHoveredOrSelected ? '#333' : CATEGORY_COLORS[point.category]}
-                  strokeWidth={3}
-                  style={{ cursor: 'pointer', pointerEvents: 'auto', transition: 'all 0.15s ease' }}
-                  onMouseEnter={() => {
-                    if (point.category === 'Employer') {
-                      setHoveredEmployerId(point.id);
+                  <circle
+                    key={`${point.category}-${point.id}`}
+                    cx={x(point.x)}
+                    cy={y(point.y)}
+                    r={displayRadius}
+                    fill={CATEGORY_COLORS[point.category]}
+                    fillOpacity={isHoveredOrSelected ? 1 : 0.88}
+                    stroke={
+                      isHoveredOrSelected
+                        ? "#333"
+                        : CATEGORY_COLORS[point.category]
                     }
-                    setActivePoint(point);
-                  }}
-                  onMouseMove={(e) => {
-                    const rect = e.currentTarget.closest('.chart-wrap').getBoundingClientRect();
-                    setTooltipPos({
-                      x: e.clientX - rect.left + 10,
-                      y: e.clientY - rect.top + 10,
-                    });
-                  }}
-                  onMouseLeave={() => {
-                    setHoveredEmployerId(null);
-                    setActivePoint(null);
-                  }}
-                  onClick={() => {
-                    if (point.category === 'Employer') {
-                      setSelectedEmployerId(point.id);
-                      if (onEmployerSelect) {
-                        onEmployerSelect(point);
+                    strokeWidth={3}
+                    style={{
+                      cursor: "pointer",
+                      pointerEvents: "auto",
+                      transition: "all 0.15s ease",
+                    }}
+                    onMouseEnter={() => {
+                      if (point.category === "Employer") {
+                        setHoveredEmployerId(point.id);
                       }
-                    }
-                  }}
-                />
+                      setActivePoint(point);
+                    }}
+                    onMouseMove={(e) => {
+                      const rect = e.currentTarget
+                        .closest(".chart-wrap")
+                        .getBoundingClientRect();
+                      setTooltipPos({
+                        x: e.clientX - rect.left + 10,
+                        y: e.clientY - rect.top + 10,
+                      });
+                    }}
+                    onMouseLeave={() => {
+                      setHoveredEmployerId(null);
+                      setActivePoint(null);
+                    }}
+                    onClick={() => {
+                      if (point.category === "Employer") {
+                        setSelectedEmployerId(point.id);
+                        if (onEmployerSelect) {
+                          onEmployerSelect(point);
+                        }
+                      }
+                    }}
+                  />
                 );
               })}
 
               {/* Animated pin for selected employer */}
-              {selectedEmployerId && filteredPoints.map((point) => {
-                if (point.id !== selectedEmployerId || point.category !== 'Employer') return null;
-                return (
-                  <g key={`pin-${point.id}`}>
-                    {/* Pulsing ring */}
-                    <circle
-                      cx={x(point.x)}
-                      cy={y(point.y)}
-                      r={6}
-                      fill="none"
-                      stroke={palette.incoming}
-                      strokeWidth={3}
-                      className="selected-pin-pulse"
-                      style={{ pointerEvents: 'none' }}
-                    />
-                    {/* Center indicator dot - keep same color as employer point */}
-                    <circle
-                      cx={x(point.x)}
-                      cy={y(point.y)}
-                      r={3}
-                      fill={CATEGORY_COLORS['Employer']}
-                      className="selected-pin-center"
-                      style={{ pointerEvents: 'none' }}
-                    />
-                  </g>
-                );
-              })}
+              {selectedEmployerId &&
+                filteredPoints.map((point) => {
+                  if (
+                    point.id !== selectedEmployerId ||
+                    point.category !== "Employer"
+                  )
+                    return null;
+                  return (
+                    <g key={`pin-${point.id}`}>
+                      {/* Pulsing ring */}
+                      <circle
+                        cx={x(point.x)}
+                        cy={y(point.y)}
+                        r={6}
+                        fill="none"
+                        stroke={palette.incoming}
+                        strokeWidth={3}
+                        className="selected-pin-pulse"
+                        style={{ pointerEvents: "none" }}
+                      />
+                      {/* Center indicator dot - keep same color as employer point */}
+                      <circle
+                        cx={x(point.x)}
+                        cy={y(point.y)}
+                        r={3}
+                        fill={CATEGORY_COLORS["Employer"]}
+                        className="selected-pin-center"
+                        style={{ pointerEvents: "none" }}
+                      />
+                    </g>
+                  );
+                })}
             </g>
           </svg>
 
@@ -742,10 +968,10 @@ function resetZoom() {
               className="chart-tooltip"
               role="status"
               style={{
-                position: 'absolute',
+                position: "absolute",
                 left: `${tooltipPos.x}px`,
                 top: `${tooltipPos.y}px`,
-                pointerEvents: 'auto',
+                pointerEvents: "auto",
               }}
             >
               {activeBuilding && (
@@ -764,14 +990,14 @@ function resetZoom() {
                   <span>
                     ({activePoint.x.toFixed(1)}, {activePoint.y.toFixed(1)})
                   </span>
-                  {activePoint.category === 'Employer' && (
-                    <div style={{ marginTop: '0.4rem' }}>
+                  {activePoint.category === "Employer" && (
+                    <div style={{ marginTop: "0.4rem" }}>
                       <button
                         type="button"
                         className="map-chip active"
                         onClick={() => navigate(`/employer/${activePoint.id}`)}
                         title="Open employer details"
-                        style={{ pointerEvents: 'auto' }}
+                        style={{ pointerEvents: "auto" }}
                       >
                         View details
                       </button>

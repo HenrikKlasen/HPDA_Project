@@ -1,37 +1,72 @@
-import { useMemo, useEffect, useState } from 'react';
+import React, { useEffect, useState } from "react";
+import LoadingSpinner from "../components/common/LoadingSpinner";
+import ErrorState from "../components/common/ErrorState";
+import AutoResizingIframe from "../components/common/AutoResizingIframe";
 
 function OverallViewPage() {
   const [iframeContent, setIframeContent] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
-  useEffect(() => {
-    const cachedContent = localStorage.getItem('overallViewContent');
+  const fetchContent = () => {
+    setLoading(true);
+    setError(null);
+
+    const cachedContent = localStorage.getItem("overallViewContent");
     if (cachedContent) {
       setIframeContent(cachedContent);
+      setLoading(false);
     } else {
-      fetch('http://localhost:5000/api/overall-view-page')
-        .then(res => res.text())
-        .then(html => {
-          localStorage.setItem('overallViewContent', html);
-          setIframeContent(html);
+      fetch("http://localhost:5000/api/overall-view-page")
+        .then((res) => {
+          if (!res.ok) {
+            throw new Error(`HTTP error! status: ${res.status}`);
+          }
+          return res.text();
         })
-        .catch(error => {
-          console.error('Failed to fetch overall view content:', error);
+        .then((html) => {
+          localStorage.setItem("overallViewContent", html);
+          setIframeContent(html);
+          setLoading(false);
+        })
+        .catch((err) => {
+          console.error("Failed to fetch overall view content:", err);
+          setError(err.message);
+          setLoading(false);
         });
     }
+  };
+
+  useEffect(() => {
+    fetchContent();
   }, []);
 
   return (
     <section>
-      <div className="section-intro">
-        <h2>Overall View</h2>
-        <p>
-          Main summary evidence for the three challenge questions — KPIs, wages vs cost of living,
-          employer health ranking, prosperity scatter, and spatial map.
-        </p>
-      </div>
+      {loading && (
+        <LoadingSpinner
+          size="large"
+          message="Loading overall view dashboard..."
+        />
+      )}
 
-      {iframeContent && (
-        <iframe srcDoc={iframeContent} style={{ width: '100%', height: '2000px', border: 'none' }} />
+      {error && (
+        <ErrorState
+          message="Failed to load overall view content"
+          details={error}
+          onRetry={fetchContent}
+        />
+      )}
+
+      {!loading && !error && iframeContent && (
+        <AutoResizingIframe
+          srcDoc={iframeContent}
+          title="Overall View Dashboard"
+          style={{
+            borderRadius: "12px",
+            boxShadow: "var(--shadow)",
+          }}
+        />
       )}
     </section>
   );

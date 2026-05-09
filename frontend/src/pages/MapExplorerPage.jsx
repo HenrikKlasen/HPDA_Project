@@ -1,6 +1,7 @@
 import BuildingsMap from '../components/maps/BuildingsMap';
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import ExportButton from '../components/common/ExportButton';
 
 function MapExplorerPage() {
   const [selectedEmployer, setSelectedEmployer] = useState(null);
@@ -72,7 +73,10 @@ function MapExplorerPage() {
   return (
     <section>
       <div className="section-intro">
-        <h2>Map Explorer</h2>
+        <h2>
+          Map Explorer
+          
+        </h2>
         <p>
           This tab focuses on spatial employer health, turnover, wage level, and employer size.
         </p>
@@ -80,7 +84,13 @@ function MapExplorerPage() {
 
       <div className="map-layout">
         <div className="chart-card large">
-          <h3>Employer Symbol Map</h3>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+            <h3>
+              Employer Symbol Map
+              
+            </h3>
+            <ExportButton targetRef=".map-svg" filename="map-explorer" />
+          </div>
           <p className="chart-note">
             Large version of the map with controls for color mode and selected employer.
           </p>
@@ -88,7 +98,15 @@ function MapExplorerPage() {
         </div>
 
         <aside className="details-panel">
-          <h3>Selected Employer Details</h3>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+            <h3>
+              Selected Employer Details
+              
+            </h3>
+            {selectedEmployer && (
+              <ExportButton data={[selectedEmployer]} filename="employer-details" />
+            )}
+          </div>
 
           {selectedEmployer ? (
             <>
