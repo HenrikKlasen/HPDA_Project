@@ -1,0 +1,23 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./vast_challenge.db:/app/vast_challenge.db
+      - ./VAST-Challenge-2022:/app/VAST-Challenge-2022
+    environment:
+      - FLASK_ENV=development
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+    environment:
+      - VITE_API_BASE_URL=http://localhost:5000

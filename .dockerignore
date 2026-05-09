@@ -1,0 +1,52 @@
+# Version control
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+.mypy_cache
+.venv
+*.egg-info
+*.egg
+
+# Node / frontend
+node_modules
+frontend/node_modules
+frontend/dist
+frontend/.vite
+
+# Data (mounted as volumes at runtime)
+backend/vast_challenge.db
+VAST-Challenge-2022
+
+# Development artifacts
+d3block_test_output.html
+employer_health_summary.json
+*.csv
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker (don't re-send dockerfiles)
+docker
+docker-compose.yml
+.dockerignore
+
+# Backend caches
+backend/__pycache__
+backend/*.pyc
+backend/.coverage
+
+# Environment
+.env
+.env.local
+.env.*.local
