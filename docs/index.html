@@ -214,6 +214,8 @@
           `gemini-3-pro-preview` was used as an interactive CLI agent during the
           development session to scaffold the frontend application layout, apply
           responsive styling, and to troubleshoot and correct UI/CSS issues.
+          Perplexity was used for rewriting and getting insight in from the
+          final report.
         </li>
         <li class="calibri highlight">
           <b>Henrik Klasen:</b> [Please provide detailed LLM usage disclosure
@@ -316,8 +318,7 @@
         The Information Visualization Process pipeline was applied rigorously to
         manage the scale of the VAST dataset:
         <br /><br />
-        <strong>Raw Data:</strong> Extracted from SQLite (FinancialJournal,
-        ParticipantStatusLogs, CheckinJournal). <br /><br />
+        <strong>Raw Data:</strong> Extracted from SQLite <br /><br />
         <strong>Data Processing/Filtering:</strong> Scripts were used to
         aggregate millions of row-level check-ins into monthly employer activity
         counts. We joined building polygon coordinates with employer IDs to
@@ -345,19 +346,514 @@
       <p class="calibri">
         1. We assumed the provided building coordinates map accurately to a
         standard Cartesian plane for the Explorer Map rendering.<br />
-        2. We assumed that "Workplace" check-in volume in the `CheckinJournal`
-        is a valid proxy for business activity/foot traffic, especially for
-        evaluating monthly employer performance.<br />
+        2. We assumed that "Workplace" check-in volume in the
+        <code>CheckinJournal</code> is a valid proxy for business activity/foot
+        traffic, especially for evaluating monthly employer performance.<br />
         3. We assumed that a participant's financial stability can be reasonably
         modeled by subtracting aggregated "Food," "Shelter," "Education," and
         "Recreation" costs from "Wage" income, ignoring potential unrecorded
-        external expenses,l expenses,
+        external expenses.
       </p>
 
       <div class="divider"></div>
 
       <p>&nbsp;</p>
       <p>&nbsp;</p>
+      <p>&nbsp;</p>
+
+      <h3
+        class="calibri"
+        style="margin-top: 2rem; border-bottom: 2px solid var(--primary-color)"
+      >
+        Question 1: Business Prosperity and Struggle
+      </h3>
+      <p class="calibri">
+        <b>1</b> -
+        <span class="arial"
+          >Over the period covered by the dataset, which businesses appear to be
+          more prosperous? Which appear to be struggling? Describe your
+          rationale for your answers. Limit your response to 10 images and 500
+          words.</span
+        >
+      </p>
+
+      <div class="answer-container">
+        <p class="calibri">
+          Based on the Enterprise Health Dashboard’s fabricated Health Score
+          (which evaluates employers using job listings, average hourly rates,
+          worker stability, and low turnover) we can clearly distinguish the
+          financial trajectories of businesses in Engagement, Ohio.
+        </p>
+
+        <h4 class="calibri">Prosperous Businesses</h4>
+        <p class="calibri">
+          The most prosperous businesses are <strong>Employer 1786</strong>,
+          <strong>Employer 877</strong>, and <strong>Employer 1771</strong>. As
+          seen in the Health Ranking, Employers 1786 and 877 lead the city with
+          a Health Score of 0.63, closely followed by Employer 1771 at 0.60.
+          These businesses tightly cluster in the top-right quadrant of the
+          Prosperity Scatter Plot, indicating they successfully sustain both
+          high hourly wages and high job listings simultaneously.
+        </p>
+
+        <div style="display: flex; gap: 10px; margin-bottom: 15px">
+          <img
+            src="q1/prosperous_health.png"
+            alt="Prosperous Employers Health Ranking"
+            style="
+              max-width: 48%;
+              border-radius: 6px;
+              box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            "
+          />
+          <img
+            src="q1/prosperous_activity.png"
+            alt="Prosperous Employers Activity"
+            style="
+              max-width: 48%;
+              border-radius: 6px;
+              box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            "
+          />
+        </div>
+
+        <p class="calibri">
+          A deep-dive into the financial timeline of
+          <strong>Employer 1786</strong> confirms this prosperity is meaningful
+          rather than an anomaly. The employer sustains an average daily revenue
+          of $1,964 and total study-period profit of $88,402. Crucially, the
+          timeline charts reveal that employee count mantains stable (9-10
+          workers), allowing revenue and profit lines to remain flat and
+          consistent month-over-month. Their high average hourly rate ($26.50)
+          combined with steady workplace activity check-ins shows their position
+          as one of the best economically.
+        </p>
+
+        <div style="display: flex; gap: 10px; margin-bottom: 15px">
+          <img
+            src="q1/most_prosperous.png"
+            alt="Employer 1786 Overview"
+            style="
+              max-width: 48%;
+              border-radius: 6px;
+              box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            "
+          />
+          <img
+            src="q1/most_prosperous_2.png"
+            alt="Employer 1786 Timeline"
+            style="
+              max-width: 48%;
+              border-radius: 6px;
+              box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            "
+          />
+        </div>
+
+        <h4 class="calibri">Struggling Businesses</h4>
+        <p class="calibri">
+          On the other hand, the most struggling businesses are
+          <strong>Employer 433</strong>, <strong>Employer 1756</strong>, and
+          <strong>Employer 1762</strong>. These entities bottom out the Health
+          Ranking with scores of just 0.05. In the Prosperity Scatter Plot, they
+          are grouped tightly in the bottom-left, characterized by minimal job
+          listings, low hourly rates, and high turnover.
+        </p>
+
+        <div style="margin-bottom: 15px">
+          <img
+            src="q1/struggling_health.png"
+            alt="Struggling Employers Health Ranking"
+            style="
+              max-width: 100%;
+              border-radius: 6px;
+              box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            "
+          />
+        </div>
+
+        <p class="calibri">
+          Analyzing a representative struggling firm (such as Employer 420)
+          reveals the anatomy of this distress. The financial dashboard shows
+          only $18 in average daily profit, backed by a low average employment
+          (1.9 workers) and a weak hourly rate ($11.87). More critically, the
+          timeline graphs depict a sharp deterioration: a severe decline in
+          revenue, profit, and employee count between March and April indicates
+          a business in actively decaying. floor.
+        </p>
+
+        <div style="display: flex; gap: 10px; margin-bottom: 15px">
+          <img
+            src="q1/most_struggling.png"
+            alt="Struggling Employer Overview"
+            style="
+              max-width: 48%;
+              border-radius: 6px;
+              box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            "
+          />
+          <img
+            src="q1/most_struggling_2.png"
+            alt="Struggling Employer Timeline"
+            style="
+              max-width: 48%;
+              border-radius: 6px;
+              box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            "
+          />
+        </div>
+
+        <p class="calibri">
+          We rely on the dashboard's synthesized Health Score as our primary
+          mechanism to identify the extremes of the market. We then
+          cross-reference those rankings against the detailed, specific
+          financial time-series views. True prosperity in this dataset is
+          defined by <i>consistency</i>: maintaining flat, high revenue lines
+          without workforce shedding. Struggle is defined by volatile,
+          downward-trending metrics. Note that while geospatial data is useful
+          for context, it does not reliably correlate with financial
+          performance, so our rationale is strictly based in the temporal
+          financial and turnover metrics.
+        </p>
+      </div>
+
+      <h3
+        class="calibri"
+        style="margin-top: 2rem; border-bottom: 2px solid var(--primary-color)"
+      >
+        Question 2: Resident Financial Health and Demographics
+      </h3>
+      <p class="calibri">
+        <b>2</b> -
+        <span class="arial"
+          >How does the financial health of the residents change over the period
+          covered by the dataset? How do wages compare to the overall cost of
+          living in Engagement? Are there groups that appear to exhibit similar
+          patterns? Describe your rationale for your answers. Limit your
+          response to 10 images and 500 words.</span
+        >
+      </p>
+
+      <div class="answer-container">
+        <h4 class="calibri">
+          Financial Health Over Time & Wages vs. Cost of Living
+        </h4>
+        <p class="calibri">
+          Overall, the residents' financial health declines early in the period
+          and then remains fairly flat, with a small bump around early 2023
+          before a final dip. Wages consistently remain above the overall cost
+          of living throughout the entire period in Engagement. However, because
+          both total wages and net income fall sharply at the start of the
+          timeline while the cost of living stays comparatively sticky (around
+          $1.0M to $1.2M), the primary narrative is not a collapse, but rather a
+          weakening financial position compared to the start of the dataset.
+          Residents, in aggregate, earn more than they spend, but the margin
+          shrinks.
+        </p>
+
+        <div
+          style="display: flex; justify-content: center; margin-bottom: 15px"
+        >
+          <img
+            src="q2/cost_of_living.png"
+            alt="Wages vs Cost of Living Trends"
+            style="
+              max-width: 80%;
+              border-radius: 6px;
+              box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            "
+          />
+        </div>
+
+        <p class="calibri">
+          This shrinking margin is backed by the Net Income distribution. The
+          income distribution is highly grouped; a large cluster of residents
+          sit at lower net incomes, while a smaller number of very high earners
+          stretch the average upward. Consequently, while aggregate city-wide
+          financial health looks acceptable, the median resident lives with much
+          tighter margins than the aggregate suggests.
+        </p>
+
+        <div
+          style="display: flex; justify-content: center; margin-bottom: 15px"
+        >
+          <img
+            src="q2/income.png"
+            alt="Net Income Distribution"
+            style="
+              max-width: 80%;
+              border-radius: 6px;
+              box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            "
+          />
+        </div>
+
+        <h4 class="calibri">Group Patterns and Education Demographics</h4>
+        <p class="calibri">
+          When segmenting the population, two broad clusters appear: a
+          higher-income cluster (Graduates and Bachelors) and a lower-income
+          cluster (HighSchoolOrCollege and Low). Graduate and Bachelors
+          residents enjoy significantly stronger wage cushions. Average net
+          income rests around $70k for Graduates and $53k for Bachelors, but
+          plummets to roughly $22k for HighSchoolOrCollege and $14k for the Low
+          group. This indicates that lower-earning residents bear the brunt of
+          the cost-of-living pressure.
+        </p>
+
+        <div
+          style="
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            margin-bottom: 15px;
+          "
+        >
+          <img
+            src="q2/education_wages.png"
+            alt="Wages by Education Group"
+            style="
+              max-width: 48%;
+              border-radius: 6px;
+              box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            "
+          />
+          <img
+            src="q2/profiles.png"
+            alt="Resident Financial Profiles"
+            style="
+              max-width: 48%;
+              border-radius: 6px;
+              box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            "
+          />
+        </div>
+
+        <p class="calibri">
+          The parallel coordinates view reinforces this disparity. Blue and
+          green lines (Graduates/Bachelors) consistently extend toward higher
+          wage and net income values, while orange and red lines
+          (HighSchoolOrCollege/Low) concentrate lower on those axes.
+          Interestingly, there is significant overlap in spending expenses
+          across all groups, suggesting that the primary driver of inequality in
+          Engagement is wage earning power rather than disparate spending
+          behaviors.
+        </p>
+
+        <h4 class="calibri">Social Behavior & Joviality</h4>
+        <p class="calibri">
+          Socially, residents cluster by work and leisure behaviors: one group
+          hovering around 300 workplace visits with moderate leisure, and
+          another around 650 workplace visits with higher leisure activity.
+          Despite clear correlations between education and wages, "Joviality"
+          (happiness) remains widely dispersed across all demographics. Higher
+          earnings do not uniformly translate into a happier population.
+        </p>
+
+        <div
+          style="
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            margin-bottom: 15px;
+          "
+        >
+          <img
+            src="q2/social.png"
+            alt="Social and Work Patterns"
+            style="
+              max-width: 48%;
+              border-radius: 6px;
+              box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            "
+          />
+          <img
+            src="q2/happiness.png"
+            alt="Joviality Distribution"
+            style="
+              max-width: 48%;
+              border-radius: 6px;
+              box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            "
+          />
+        </div>
+      </div>
+
+      <h3
+        class="calibri"
+        style="margin-top: 2rem; border-bottom: 2px solid var(--primary-color)"
+      >
+        Question 3: Employer Health and Labor Turnover Patterns
+      </h3>
+      <p class="calibri">
+        <b>3</b> -
+        <span class="arial"
+          >Describe the health of the various employers within the city limits.
+          What employment patterns do you observe? Do you notice any areas of
+          particularly high or low turnover? Limit your response to 10 images
+          and 500 words.</span
+        >
+      </p>
+
+      <div class="answer-container">
+        <h4 class="calibri">Employer Health & Macro Trends</h4>
+        <p class="calibri">
+          Employer health in Engagement is mixed, but the city does not suffer
+          from widespread corporate collapse. The macroeconomic labor market
+          remains generally stable; as seen in the wage trend analysis, the
+          number of active wage earners stabilizes after an initial drop, and
+          average monthly wages remain fixed in the mid-$3k to low-$4k range.
+          While the Health Ranking correctly identifies the strongest, most
+          stable employers, it is crucial to recognize a nuance in the
+          "struggling" category. Because our heuristic penalizes low occupancy
+          and high inbound worker flow, rapidly growing or newly established
+          companies can initially appear "unhealthy" despite actively hiring.
+        </p>
+
+        <div
+          style="
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            margin-bottom: 15px;
+          "
+        >
+          <img
+            src="q3/wage_trend.png"
+            alt="City-wide Wage Trend"
+            style="
+              max-width: 48%;
+              border-radius: 6px;
+              box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            "
+          />
+          <img
+            src="q3/activity_rithm.png"
+            alt="Workplace Activity Rhythm"
+            style="
+              max-width: 48%;
+              border-radius: 6px;
+              box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            "
+          />
+        </div>
+
+        <h4 class="calibri">Turnover Hotspots & Flow Nuance</h4>
+        <p class="calibri">
+          Turnover is not evenly distributed. The highest hotspots include
+          Employers 1763 (0.38 turnover rate), 1735 (0.36), and 1760 (0.22),
+          contrasting sharply with the near-zero turnover of the most prosperous
+          firms. However, analyzing the directional flow of the Mobility Network
+          reveals distinctly different types of high-turnover behavior.
+        </p>
+
+        <div
+          style="
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            margin-bottom: 15px;
+          "
+        >
+          <img
+            src="q3/des_turnover.png"
+            alt="Highest Turnover Employers"
+            style="
+              max-width: 48%;
+              border-radius: 6px;
+              box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            "
+          />
+          <img
+            src="q3/asc_turnover.png"
+            alt="Lowest Turnover Employers"
+            style="
+              max-width: 48%;
+              border-radius: 6px;
+              box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            "
+          />
+        </div>
+
+        <p class="calibri">
+          For example, Employer 1793 operates as a "labor exporter," exporting
+          workers heavily to other firms with almost no incoming replacements (a
+          true indicator of poor internal health). Conversely, Employers 420 and
+          1327 absorb massive incoming worker transfers without losing existing
+          staff. Though mathematically flagged by our health metric as unstable
+          due to the sudden influx, visual network analysis confirms they are
+          actually expanding entities aggressively scaling their workforce.
+        </p>
+
+        <div
+          style="
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            margin-bottom: 15px;
+          "
+        >
+          <img
+            src="q3/all_leaving_transfer.png"
+            alt="Labor Exporter (Employer 1793)"
+            style="
+              max-width: 32%;
+              border-radius: 6px;
+              box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            "
+          />
+          <img
+            src="q3/least_properous_transfer.png"
+            alt="Expanding Firm (Employer 1327)"
+            style="
+              max-width: 32%;
+              border-radius: 6px;
+              box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            "
+          />
+          <img
+            src="q3/420_all_in_transfer.png"
+            alt="Expanding Firm (Employer 420)"
+            style="
+              max-width: 32%;
+              border-radius: 6px;
+              box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            "
+          />
+        </div>
+
+        <h4 class="calibri">Employment Patterns & Spatial Dynamics</h4>
+        <p class="calibri">
+          Temporally, city employment is concentrated in conventional daytime
+          shifts. Check-in logs show a massive morning peak (7:00–8:00 AM) and a
+          smaller post-lunch wave, rather than a 24-hour shift economy.
+        </p>
+        <p class="calibri">
+          Spatially, businesses are distributed across multiple distinct
+          geographic clusters rather than a single unified downtown. The labor
+          mobility maps demonstrate that job transitions are highly networked.
+          Turnover and rapid exchange are particularly intense within the denser
+          central-western cluster, where firms are in close physical proximity.
+          In contrast, peripheral employers appear more isolated, maintaining
+          their workforce with fewer, but physically longer, cross-city transfer
+          links. Mature, prosperous firms (e.g., Employer 1786) sit largely
+          insulated.
+        </p>
+
+        <div
+          style="display: flex; justify-content: center; margin-bottom: 15px"
+        >
+          <img
+            src="q3/most_prosperous_transfer.png"
+            alt="Stable Employer Mobility Network"
+            style="
+              max-width: 80%;
+              border-radius: 6px;
+              box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            "
+          />
+        </div>
+      </div>
+
       <p>&nbsp;</p>
     </div>
   </body>
