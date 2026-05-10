@@ -150,23 +150,98 @@ function EmploymentTurnoverPage() {
                 />
               )
             : mapData && (
-                <div
-                  className="chart-card large"
-                  style={{ animation: "fadeIn 0.3s ease" }}
-                >
-                  <p className="chart-note">
-                    Hover over or click an employer to reveal incoming/outgoing
-                    worker transfers.
-                  </p>
-                  <BuildingsMap
-                    onEmployerSelect={handleEmployerSelect}
-                    transitionData={mapData}
-                    isEmploymentNetworkMap={true}
-                    hideFilters={true}
-                    employers={employers}
-                    colorblindMode={colorblindMode}
-                    onColorblindToggle={setColorblindMode}
-                  />
+                <div className="map-layout" style={{ animation: "fadeIn 0.3s ease", display: "flex", gap: "20px" }}>
+                  <div
+                    className="chart-card large"
+                    style={{ flex: 1 }}
+                  >
+                    <p className="chart-note">
+                      Hover over or click an employer to reveal incoming/outgoing
+                      worker transfers.
+                    </p>
+                    <BuildingsMap
+                      onEmployerSelect={handleEmployerSelect}
+                      transitionData={mapData}
+                      isEmploymentNetworkMap={true}
+                      hideFilters={true}
+                      employers={employers}
+                      colorblindMode={colorblindMode}
+                      onColorblindToggle={setColorblindMode}
+                    />
+                  </div>
+
+                  <aside className="details-panel chart-card" style={{ width: "320px", height: "fit-content", flexShrink: 0 }}>
+                    <h3>Selected Employer</h3>
+                    {selectedEmployer ? (
+                      <>
+                        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "8px", fontSize: "13px" }}>
+                          <span style={{ color: "#666" }}>Name</span>
+                          <strong style={{ textAlign: "right", maxWidth: "200px" }}>{selectedEmployer.name}</strong>
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "8px", fontSize: "13px" }}>
+                          <span style={{ color: "#666" }}>ID</span>
+                          <strong>{selectedEmployer.id}</strong>
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "16px", fontSize: "13px" }}>
+                          <span style={{ color: "#666" }}>Prosperity</span>
+                          <strong>
+                            {(() => {
+                              const emp = employers.find(e => Number(e.employerId) === Number(selectedEmployer.id));
+                              const score = emp?.health_score;
+                              return score !== undefined && score !== null ? `${Math.round(score * 100)}%` : 'n/a';
+                            })()}
+                          </strong>
+                        </div>
+                        
+                        <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: '16px' }}>
+                          <h4 style={{ fontSize: '13px', marginBottom: '12px', margin: '0 0 12px 0' }}>Worker Transfers</h4>
+                          <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+                              <thead>
+                                <tr style={{ borderBottom: '2px solid #e5e7eb' }}>
+                                  <th style={{ textAlign: 'left', padding: '6px 4px', fontWeight: 'bold' }}>Employer</th>
+                                  <th style={{ textAlign: 'center', padding: '6px 4px', fontWeight: 'bold' }}>In</th>
+                                  <th style={{ textAlign: 'center', padding: '6px 4px', fontWeight: 'bold' }}>Out</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {mapData.nodes
+                                  .map(node => {
+                                    const incoming = mapData.links.find(l => String(l.target) === String(selectedEmployer.id) && String(l.source) === String(node.id));
+                                    const outgoing = mapData.links.find(l => String(l.source) === String(selectedEmployer.id) && String(l.target) === String(node.id));
+                                    return { node, incoming, outgoing, total: (incoming?.value || 0) + (outgoing?.value || 0) };
+                                  })
+                                  .filter(t => t.total > 0)
+                                  .sort((a, b) => b.total - a.total)
+                                  .map((t, idx) => (
+                                    <tr key={idx} style={{ borderBottom: '1px solid #f3f4f6' }}>
+                                      <td style={{ padding: '8px 4px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '140px' }} title={t.node.name}>{t.node.name}</td>
+                                      <td style={{ textAlign: 'center', color: inColor, fontWeight: 'bold', padding: '8px 4px' }}>{t.incoming ? t.incoming.value : '—'}</td>
+                                      <td style={{ textAlign: 'center', color: outColor, fontWeight: 'bold', padding: '8px 4px' }}>{t.outgoing ? t.outgoing.value : '—'}</td>
+                                    </tr>
+                                  ))
+                                }
+                              </tbody>
+                            </table>
+                          </div>
+                          <div style={{ marginTop: '16px', fontSize: '11px', display: 'flex', gap: '16px', justifyContent: 'center' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                              <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', backgroundColor: inColor }}></span>
+                              Incoming
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                              <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', backgroundColor: outColor }}></span>
+                              Outgoing
+                            </div>
+                          </div>
+                        </div>
+                      </>
+                    ) : (
+                      <div style={{ color: "#6b7280", fontStyle: "italic", textAlign: "center", padding: "40px 0" }}>
+                        Click an employer on the map to see their transfer network details here.
+                      </div>
+                    )}
+                  </aside>
                 </div>
               )}
         </div>
