@@ -800,8 +800,8 @@ def _render_synced_joined_views_html(
 	.axis text { font-size: 10px; }
 	.axis path, .axis line { stroke: #bbb; }
 	.tooltip { position: fixed; background: rgba(20, 20, 20, 0.92); color: #fff; padding: 8px 12px;
-	  border-radius: 6px; font-size: 12px; pointer-events: none; opacity: 0;
-	  transition: opacity 0.12s; line-height: 1.6; z-index: 1000; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+	  border-radius: 6px; font-size: 12px; pointer-events: none; opacity: 0; 
+	  transition: opacity 0.12s; line-height: 1.6; z-index: 9999999999999; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
 </style>
 <script src="https://d3js.org/d3.v7.min.js"></script>
 </head>
@@ -2495,7 +2495,7 @@ body{font-family:Arial,sans-serif;background:#f4f5f7;color:#222;padding:16px}
 .ranking-wrap{overflow-y:auto;max-height:320px}
 .tooltip { position: fixed; background: rgba(20, 20, 20, 0.92); color: #fff; padding: 8px 12px;
   border-radius: 6px; font-size: 12px; pointer-events: none; opacity: 0;
-  transition: opacity 0.12s; line-height: 1.6; z-index: 1000; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+  transition: opacity 0.12s; line-height: 1.6; z-index: 99999999999; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
 @media(max-width:800px){.kpi-grid{grid-template-columns:repeat(3,1fr)}.chart-grid{grid-template-columns:1fr}}
 </style>
 </head>
@@ -2847,7 +2847,7 @@ body { margin: 0; font-family: Arial, sans-serif; background: #f4f5f7; color: #2
 /* shared tooltip */
 .tooltip { position: fixed; background: rgba(20, 20, 20, 0.92); color: #fff; padding: 8px 12px;
   border-radius: 6px; font-size: 12px; pointer-events: none; opacity: 0;
-  transition: opacity 0.12s; line-height: 1.6; z-index: 1000; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+  transition: opacity 0.12s; line-height: 1.6; z-index: 9999999999999; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
 
 .axis text { font-size: 9px; fill: #666; }
 .axis path, .axis line { stroke: #ddd; }
@@ -3208,7 +3208,7 @@ body { font-family: Arial, sans-serif; background: #f4f5f7; color: #222; padding
 .leg-item { display: flex; align-items: center; gap: 4px; cursor: pointer; }
 .leg-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
 .tooltip { position: fixed; background: rgba(20,20,20,.92); color: #fff; padding: 8px 12px;
-  border-radius: 6px; font-size: 12px; pointer-events: none; opacity: 0; z-index: 1000; }
+  border-radius: 6px; font-size: 12px; pointer-events: none; opacity: 0; z-index: 9999999999999; }
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:Arial,sans-serif;background:#f4f5f7;color:#222;padding:16px}
 .header{margin-bottom:16px;text-align:left; background: #fff; padding: 16px 20px; border-radius: 10px; box-shadow: 0 1px 4px rgba(0,0,0,.1); transition: transform 0.2s, box-shadow 0.2s;}
@@ -3235,12 +3235,12 @@ body{font-family:Arial,sans-serif;background:#f4f5f7;color:#222;padding:16px}
     <h3>Net Income by Education Group <span class="info-icon" onmouseover="showTip('<strong>Educational demographics</strong><br>Avg wage, expenses, net income per education level. <br>Click a group to highlight in parallel coords.', event)" onmouseout="hideTip()">?</span></h3>
     <div id="ch-groups"></div>
   </div>
-</div>
 
-<div class="chart-panel full">
-  <h3>Resident Financial Profiles <span class="info-icon" onmouseover="showTip('<strong>Participant deep-dive</strong><br>Each line = one participant. <br>Color = education level.<br> Click a group above to highlight.', event)" onmouseout="hideTip()">?</span></h3>
-  <div class="legend" id="pc-legend"></div>
-  <div id="ch-pc"></div>
+  <div class="chart-panel full">
+    <h3>Resident Financial Profiles <span class="info-icon" onmouseover="showTip('<strong>Participant deep-dive</strong><br>Each line = one participant. <br>Color = education level.<br> Click a group above to highlight.', event)" onmouseout="hideTip()">?</span></h3>
+    <div class="legend" id="pc-legend"></div>
+    <div id="ch-pc"></div>
+  </div>
 </div>
 
 <div class="tooltip" id="tip"></div>
@@ -3856,7 +3856,7 @@ body{font-family:'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;background:#f4f
 .chart-panel.full-width { grid-column: span 2; }
 .tooltip { position: fixed; background: rgba(20, 20, 20, 0.92); color: #fff; padding: 10px 14px;
   border-radius: 8px; font-size: 12px; pointer-events: none; opacity: 0;
-  transition: opacity 0.12s; line-height: 1.6; z-index: 1000; box-shadow: 0 4px 12px rgba(0,0,0,0.15); border: 1px solid rgba(255,255,255,0.1); }
+  transition: opacity 0.12s; line-height: 1.6; z-index: 9999999999999; box-shadow: 0 4px 12px rgba(0,0,0,0.15); border: 1px solid rgba(255,255,255,0.1); }
 .info-icon{display:inline-flex;align-items:center;justify-content:center;width:16px;height:14px;
   background:#2f5d8c;color:#fff;border-radius:50%;font-size:10px;margin-left:8px;cursor:help;vertical-align:middle}
 .chart-container { flex-grow: 1; position: relative; }

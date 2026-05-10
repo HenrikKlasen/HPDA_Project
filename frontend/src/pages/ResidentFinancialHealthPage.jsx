@@ -43,14 +43,6 @@ function ResidentFinancialHealthPage() {
 
   return (
     <section>
-      <div className="section-intro">
-        <h2>Resident Vitality & Financial Well-being</h2>
-        <p>
-          Wages, expenses, net income, cost of living, and resident groups with
-          similar patterns.
-        </p>
-      </div>
-
       {loading && (
         <LoadingSpinner
           size="large"
