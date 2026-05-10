@@ -218,8 +218,23 @@
           final report.
         </li>
         <li class="calibri highlight">
-          <b>Henrik Klasen:</b> [Please provide detailed LLM usage disclosure
-          here.]
+          <b>Henrik Klasen:</b> Github copilot was used as an assistant to write the source code due to 
+          unfamiliarity with React and D3.js. It was also very helpful in troubleshooting issues and as 
+          a debugging assistant. The backend file <code>d3js.py</code> was largely written by hand, while 
+          the database integration into this backend was done using copilot. The settings that were on are:
+          <ul>
+            <li>Coding mode: Agent</li>
+            <li>Toolselection: Automatic</li>
+            <li>Model selection: Automatic</li>
+          </ul> 
+          A large part has been developed by asking for Claude Haiku 4.5, this has been done for critical parts only though.
+          Inline code suggestions have largely not been used, but rather a three step strategy has been followed: 
+            <ol>
+              <li>Present a feature request with quite high specificity and ask agent to create a plan</li>
+              <li>Refine agents plan until usable</li>
+              <li>Edit the code and debug</li>
+            </ol> 
+          This ensured functionality over time to make sure old code did not break and we get new functionality
         </li>
         <li class="calibri highlight">
           <b>Michalina Miszkiewicz:</b> [Please provide detailed LLM usage
