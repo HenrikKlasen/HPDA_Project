@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import LoadingSpinner from "../components/common/LoadingSpinner";
 import AutoResizingIframe from "../components/common/AutoResizingIframe";
 import BuildingsMap from "../components/maps/BuildingsMap";
@@ -7,9 +7,10 @@ import BuildingsMap from "../components/maps/BuildingsMap";
 function BusinessHealthPage() {
   const [iframeContent, setIframeContent] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [viewMode, setViewMode] = useState("trends"); // 'trends' or 'map'
+  const location = useLocation();
+  const [viewMode, setViewMode] = useState(location.state?.viewMode || "trends"); // 'trends' or 'map'
   const [employers, setEmployers] = useState([]);
-  const [selectedEmployerId, setSelectedEmployerId] = useState(null);
+  const [selectedEmployerId, setSelectedEmployerId] = useState(location.state?.selectedEmployerId || null);
   const navigate = useNavigate();
 
   useEffect(() => {

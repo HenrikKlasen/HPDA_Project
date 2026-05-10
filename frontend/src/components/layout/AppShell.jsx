@@ -22,6 +22,7 @@ function AppShell({ children }) {
   const location = useLocation();
   const [showBackToTop, setShowBackToTop] = useState(false);
   const [isScrolled, setIsScrolled] = useState(false);
+  const isFinancialsPage = location.pathname.includes('/financials');
 
   // Scroll logic
   useEffect(() => {
@@ -62,44 +63,48 @@ function AppShell({ children }) {
 
   return (
     <div className="app-shell">
-      <header className="app-header">
-        <div className="header-content">
-          <div>
-            <h1>VAST Challenge 2022 — Challenge 3: Economic</h1>
-            <p>
-              Visual analytics dashboard for the financial health of businesses,
-              residents, wages, cost of living, employment, and turnover in
-              Engagement, Ohio.
-            </p>
+      {!isFinancialsPage && (
+        <header className="app-header">
+          <div className="header-content">
+            <div>
+              <h1>VAST Challenge 2022 — Challenge 3: Economic</h1>
+              <p>
+                Visual analytics dashboard for the financial health of businesses,
+                residents, wages, cost of living, employment, and turnover in
+                Engagement, Ohio.
+              </p>
+            </div>
+            <div className="header-help">
+              <span className="help-text" title="Keyboard shortcuts available">
+                Press <kbd>Alt</kbd> + <kbd>1-{tabs.length}</kbd> to navigate tabs
+              </span>
+            </div>
           </div>
-          <div className="header-help">
-            <span className="help-text" title="Keyboard shortcuts available">
-              Press <kbd>Alt</kbd> + <kbd>1-{tabs.length}</kbd> to navigate tabs
-            </span>
-          </div>
-        </div>
-      </header>
+        </header>
+      )}
 
       <main className="app-main">
-        <div
-          className={`tabs-sticky-container ${isScrolled ? "scrolled" : ""}`}
-        >
-          <nav className="tabs" aria-label="Dashboard tabs">
-            {tabs.map((tab) => (
-              <NavLink
-                key={tab.to}
-                to={tab.to}
-                className={({ isActive }) =>
-                  `tab-link${isActive ? " active" : ""}`
-                }
-                title={`${tab.label} (Alt+${tab.shortcut})`}
-              >
-                <span className="tab-label">{tab.label}</span>
-                <span className="tab-shortcut">{tab.shortcut}</span>
-              </NavLink>
-            ))}
-          </nav>
-        </div>
+        {!isFinancialsPage && (
+          <div
+            className={`tabs-sticky-container ${isScrolled ? "scrolled" : ""}`}
+          >
+            <nav className="tabs" aria-label="Dashboard tabs">
+              {tabs.map((tab) => (
+                <NavLink
+                  key={tab.to}
+                  to={tab.to}
+                  className={({ isActive }) =>
+                    `tab-link${isActive ? " active" : ""}`
+                  }
+                  title={`${tab.label} (Alt+${tab.shortcut})`}
+                >
+                  <span className="tab-label">{tab.label}</span>
+                  <span className="tab-shortcut">{tab.shortcut}</span>
+                </NavLink>
+              ))}
+            </nav>
+          </div>
+        )}
 
         {children}
         <button

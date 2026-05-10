@@ -317,10 +317,25 @@ function EmployerFinancialsDashboard() {
       >
         <h2>{data.employer_name} Details</h2>
         <Link
-          to={`/employer/${id}`}
-          style={{ marginLeft: "auto", fontSize: "14px" }}
+          to="/business"
+          state={{ viewMode: 'map', selectedEmployerId: id }}
+          style={{
+            marginLeft: "auto",
+            fontSize: "14px",
+            background: "#2f5d8c",
+            color: "white",
+            padding: "8px 16px",
+            borderRadius: "6px",
+            textDecoration: "none",
+            fontWeight: "bold",
+            display: "inline-block",
+            boxShadow: "0 2px 4px rgba(0,0,0,0.1)",
+            transition: "all 0.2s ease"
+          }}
+          onMouseOver={(e) => e.currentTarget.style.background = "#1e4066"}
+          onMouseOut={(e) => e.currentTarget.style.background = "#2f5d8c"}
         >
-          ← Back to map
+          ← Back to Map Explorer
         </Link>
       </div>
 

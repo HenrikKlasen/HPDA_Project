@@ -109,7 +109,7 @@ function AboutPage() {
               },
               {
                 tab: "Enterprise Health",
-                desc: "A deep-dive into business stability. Linked charts allow you to correlate hourly rates with job listings and turnover. Click any employer to instantly highlight its specific workplace activity and size metrics across the entire dashboard. An Explorer Map is provided to select a specific employer to know more about them in detail, just click on one point in the map, and you will be redirected to enterprise dashboard for that employer.",
+                desc: "A deep-dive into business stability. Linked charts allow you to correlate hourly rates with job listings and turnover. Click any employer to instantly highlight its specific workplace activity and size metrics across the entire dashboard. An Explorer Map is provided to select a specific employer to know more about them in detail.",
               },
               {
                 tab: "Citizen Finances",
