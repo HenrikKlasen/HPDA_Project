@@ -13,8 +13,7 @@ This project is a comprehensive visual analytics dashboard designed to solve **C
 ```text
 HPDA_Project/
 ├── backend/                  # Python/Flask API server and data processing scripts
-│   ├── server.py             # Main API server
-│   ├── d3js.py               # Complex data aggregations and D3-ready HTML generation
+│   ├── d3js.py               # Main API server
 │   └── database.py           # DB connection and queries
 ├── frontend/                 # React application
 │   ├── public/               # Static assets and map data (JSON/CSV)
@@ -45,7 +44,7 @@ HPDA_Project/
    ```
 3. Start the server:
    ```bash
-   python server.py
+   python d3js.py
    ```
    _(The backend server will run on port 5000 by default)._
 
