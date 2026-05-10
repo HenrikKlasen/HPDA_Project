@@ -15,7 +15,6 @@ const tabs = [
     label: "Labor Dynamics",
     shortcut: "5",
   },
-  { to: "/map", label: "Urban Explorer", shortcut: "6" },
 ];
 
 function AppShell({ children }) {

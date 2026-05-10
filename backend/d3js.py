@@ -2861,8 +2861,6 @@ body { margin: 0; font-family: Arial, sans-serif; background: #f4f5f7; color: #2
 <div class="page">
 
   <div class="dash-header">
-    <h2>Enterprise Health Dashboard</h2>
-    <p class="dash-sub">Focus: Which businesses appear prosperous or struggling?  Click any employer in any chart to highlight it across all views.</p>
     <div class="dash-note">&#9432; Health score is <strong>derived/estimated</strong>: 0.25×(jobs) + 0.25×(avg rate) + 0.25×(stable) &minus; 0.25×(turnover rate). Not an official economic measure.</div>
     <div class="cat-legend" id="cat-legend">
       <span style="font-size:11px;color:#666;margin-right:4px;">Filter:</span>
@@ -2953,6 +2951,7 @@ function hideTip() { tip.style('opacity', 0); }
 function selectEmployer(id) {
   selectedId = (selectedId === id) ? null : id;
   applySelection();
+  window.parent.postMessage({ type: 'EMPLOYER_SELECTED', employerId: selectedId }, '*');
 }
 
 function applySelection() {
@@ -2998,7 +2997,7 @@ const catLegend = d3.select('#cat-legend');
   btn.append('span').text(cat);
 });
 catLegend.append('button').attr('class','deselect-btn').text('Clear selection')
-  .on('click', () => { selectedId = null; applySelection(); updateDetailsBar(); });
+  .on('click', () => { selectedId = null; applySelection(); updateDetailsBar(); window.parent.postMessage({ type: 'EMPLOYER_SELECTED', employerId: null }, '*'); });
 
 // ── gradient legend canvas ─────────────────────────────────
 const canvas = document.getElementById('grad-canvas');

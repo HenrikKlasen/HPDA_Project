@@ -66,6 +66,7 @@ function BuildingsMap({
   employers = [],
   colorblindMode: colorblindModeProp,
   onColorblindToggle,
+  initialSelectedEmployerId = null,
 }) {
   const svgRef = useRef(null);
   const groupRef = useRef(null);
@@ -76,7 +77,14 @@ function BuildingsMap({
   const [error, setError] = useState("");
   const [activeBuilding, setActiveBuilding] = useState(null);
   const [activePoint, setActivePoint] = useState(null);
-  const [selectedEmployerId, setSelectedEmployerId] = useState(null);
+  const [selectedEmployerId, setSelectedEmployerId] = useState(initialSelectedEmployerId ? String(initialSelectedEmployerId) : null);
+
+  useEffect(() => {
+    if (initialSelectedEmployerId !== null && initialSelectedEmployerId !== undefined) {
+      setSelectedEmployerId(String(initialSelectedEmployerId));
+    }
+  }, [initialSelectedEmployerId]);
+
   const [hoveredEmployerId, setHoveredEmployerId] = useState(null);
   const [internalColorblindMode, setInternalColorblindMode] = useState(false);
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
@@ -855,15 +863,19 @@ function BuildingsMap({
                   .join(" ");
                 const isActive = activeBuilding?.id === building.id;
                 const isEnabled = !!enabledTypes[building.type];
+                
+                // Dim building if an employer is selected
+                const isDimmed = selectedEmployerId ? true : false;
+                
                 return (
                   <path
                     key={`building-${building.id}`}
                     d={pathData}
-                    fill={typeColors[building.type]}
+                    fill={isDimmed ? "#e5e7eb" : typeColors[building.type]}
                     className={isEnabled ? undefined : "building-deactivated"}
-                    stroke={isActive ? "#ffffff" : "#1f2937"}
+                    stroke={isActive ? "#ffffff" : (isDimmed ? "#d1d5db" : "#1f2937")}
                     strokeWidth={isActive ? "2" : "0.8"}
-                    opacity={isActive ? 0.9 : 0.6}
+                    opacity={isDimmed ? (isActive ? 0.8 : 0.3) : (isActive ? 0.9 : 0.6)}
                     style={{
                       cursor: isEnabled ? "pointer" : "default",
                       transition: "all 0.2s ease",
@@ -902,6 +914,12 @@ function BuildingsMap({
                 const isHoveredOrSelected =
                   hoveredEmployerId === point.id ||
                   selectedEmployerId === point.id;
+                
+                // If there's an active selection, only the selected one and the hovered one stay fully visible
+                const isDimmed = selectedEmployerId 
+                  ? (point.id !== selectedEmployerId && point.id !== hoveredEmployerId)
+                  : false;
+
                 const displayRadius = isActive
                   ? baseRadius + 2
                   : isHoveredOrSelected
@@ -915,13 +933,13 @@ function BuildingsMap({
                     cy={y(point.y)}
                     r={displayRadius}
                     fill={CATEGORY_COLORS[point.category]}
-                    fillOpacity={isHoveredOrSelected ? 1 : 0.88}
+                    fillOpacity={isDimmed ? 0.2 : (isHoveredOrSelected ? 1 : 0.88)}
                     stroke={
-                      isHoveredOrSelected
+                      isDimmed ? "none" : (isHoveredOrSelected
                         ? "#333"
-                        : CATEGORY_COLORS[point.category]
+                        : CATEGORY_COLORS[point.category])
                     }
-                    strokeWidth={3}
+                    strokeWidth={isDimmed ? 0 : 3}
                     style={{
                       cursor: "pointer",
                       pointerEvents: "auto",

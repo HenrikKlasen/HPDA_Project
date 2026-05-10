@@ -109,7 +109,7 @@ function AboutPage() {
               },
               {
                 tab: "Enterprise Health",
-                desc: "A deep-dive into business stability. Linked charts allow you to correlate hourly rates with job listings and turnover. Click any employer to instantly highlight its specific workplace activity and size metrics across the entire dashboard.",
+                desc: "A deep-dive into business stability. Linked charts allow you to correlate hourly rates with job listings and turnover. Click any employer to instantly highlight its specific workplace activity and size metrics across the entire dashboard. An Explorer Map is provided to select a specific employer to know more about them in detail, just click on one point in the map, and you will be redirected to enterprise dashboard for that employer.",
               },
               {
                 tab: "Citizen Finances",
@@ -118,10 +118,6 @@ function AboutPage() {
               {
                 tab: "Labor Dynamics",
                 desc: "The core engine for workforce analysis. Features a dual-view toggle: 'Statistical Trends' for city-wide participation and work-life balance correlations, and 'Mobility Network' for a geographical view of job transfers between employers.",
-              },
-              {
-                tab: "Urban Explorer",
-                desc: "An interactive infrastructure map. Explore building footprints (Residential, Commercial, School) and location points for social venues. Hover over any object for detailed coordinates and infrastructure metadata.",
               },
             ].map(({ tab, desc }) => (
               <div

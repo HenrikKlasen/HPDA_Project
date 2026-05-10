@@ -4,7 +4,6 @@ import AppShell from "./components/layout/AppShell";
 import AboutPage from "./pages/AboutPage";
 import BusinessHealthPage from "./pages/BusinessHealthPage";
 import EmploymentTurnoverPage from "./pages/EmploymentTurnoverPage";
-import MapExplorerPage from "./pages/MapExplorerPage";
 import EmployerDetailPage from "./pages/EmployerDetailPage";
 import EmployerFinancialsDashboard from "./pages/EmployerFinancialsDashboard";
 import OverallViewPage from "./pages/OverallViewPage";
@@ -19,7 +18,6 @@ function App() {
         <Route path="/business" element={<BusinessHealthPage />} />
         <Route path="/residents" element={<ResidentFinancialHealthPage />} />
         <Route path="/employment" element={<EmploymentTurnoverPage />} />
-        <Route path="/map" element={<MapExplorerPage />} />
         <Route path="/employer/:id" element={<EmployerDetailPage />} />
         <Route
           path="/employer/:id/financials"
